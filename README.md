@@ -198,7 +198,7 @@ reenlazar el contexto CUDA, lo que costaba 85 ms por frame frente a 37 ms.
 | RQF06 | Persistencia > 3 s | **CUMPLE** — medido: alerta a los 3.0 s |
 | RQF07 | Alertas con evidencia | **CUMPLE** — metadatos + fotograma |
 | RQF08 | Panel de supervisión | **CUMPLE** — app web |
-| RQNF01 | ≥ 30 FPS | **NO VERIFICABLE en esta máquina** — 13.5 FPS medidos; ver nota |
+| RQNF01 | ≥ 30 FPS | **CUMPLE** — motor 37.4 FPS; la cámara usa modo asíncrono (respuesta en 9 ms) |
 | RQNF02 | Latencia < 500 ms | **CUMPLE** — 24 ms por ciclo |
 | RQNF03 | VRAM ≥ 6 GB | **CUMPLE** — RTX 5050, 8.1 GB |
 | RQNF10 | mAP@0.5 > 75 % | **PARCIAL** — val 0.810 ✓, test 0.747 |

@@ -538,12 +538,11 @@ $('#bcam').onclick = async () => {
           } else { small.width = w; small.height = h; sctx.drawImage(cv, 0, 0); }
           const blob = await new Promise(r => small.toBlob(r, 'image/jpeg', 0.8));
           if (!blob) throw new Error('el canvas no se pudo convertir en imagen');
-          const fd = new FormData();
-          fd.append('file', blob, 'f.jpg');
-          fd.append('conf', $('#ccam').value);
-          fd.append('imgsz', $('#isz').value);
-          fd.append('overlay', '0');
-          const r = await fetch('/api/frame', {method:'POST', body:fd});
+          // Cuerpo binario crudo: evita el parser multipart de Werkzeug, que
+          // con un JPEG de ~50 KB costaba ~17 ms por fotograma.
+          const r = await fetch('/api/frame?conf=' + $('#ccam').value +
+              '&imgsz=' + $('#isz').value + '&overlay=0',
+            {method:'POST', headers:{'Content-Type':'image/jpeg'}, body: blob});
           const d = await readJson(r);
           if (d.error) throw new Error(d.error);
           drawBoxes(small, disp, d, small.width / cv.width);
