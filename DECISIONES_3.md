@@ -490,3 +490,87 @@ borrado del disco. No se versionaron nunca.
 Cuatro intentos, cuatro que empeoran. Todos compartían un mismo origen del
 problema: **ninguno.connía datos que el modelo no puede verificar por sí
 mismo**. El cuello de botella no es la cantidad de datos, es su fiabilidad.
+
+---
+
+# PARTE 8 — Falsos "caída" con gente de pie: causa y arreglo
+
+## Síntoma
+
+En la cámara en directo una persona que camina erguida se marcaba como riesgo.
+Al subir un vídeo con el mismo contenido, la detección era correcta.
+
+## El diagnóstico,'con la evidencia
+
+Se añadió instrumentación temporal (endpoint `/api/debug`, **no commiteada**)
+que registrava por fotograma qué encontró COCO, qué clase salió, **de dónde** y
+qué tenía cacheado el motor. Con el historial de 60 fotogramas de cada fuente
+salió esto:
+
+| fuente | tamaño | origen | BAJO/NEUTRO | MEDIO | ALTO |
+|---|---|---|---|---|---|
+| cámara | 1280×720 | crop (modelo) | 3 | 2 | **12** |
+| cámara | 1280×720 | geometría | 8 | 0 | 2 |
+| vídeo | 640×352 | crop (modelo) | 0 | 4 | 0 |
+| vídeo | 640×352 | geometría | 6 | 0 | 10 |
+
+**Los 12 falsos «persona caída» de la cámara salieron los 12 del clasificador
+por recorte, y ninguno de la geometría.**
+
+El mecanismo: el clasificador por recorte solo responde cuando la persona ocupa
+mucho encuadre. En la webcam a 1280×720 siempre respondía, y es el que se
+equivoca. En el vídeo a 640×352 la persona va pequeña, el recorte no sabe
+clasificar, salta el respaldo geométrico y por eso el vídeo salía bien. **No
+era un problema de la webcam: era un clasificador defectuoso que solo se
+manifestaba cuando la persona estaba cerca.**
+
+## Por qué el recorte falla
+
+Medido sobre el test set completo:
+
+| realidad | crop (modelo) | geometría |
+|---|---|---|
+| de pie (59 imgs) | **31%** | **64%** |
+| caído (41 imgs) | **78%** | **93%** |
+
+El recorte marcaba `persona_caido` a 13 personas que estaban de pie.
+
+## Arreglo
+
+La geometría de la pose pasa a mandar, y el recorte queda como respaldo. Se
+aplica solo cuando hay **una sola persona**: con varias, sus keypoints describen
+a una sola y no se pueden extrapolar.
+
+| | antes | después |
+|---|---|---|
+| acierto persona de pie | 31% | **88%** |
+| acierto persona caída | 78% | **88%** |
+
+## El conflicto con los 30 FPS (RQNF01)
+
+Al bajar la cadencia de la pose aparece un intercambio medido:
+
+| `pose_every` | de pie | caído | fps |
+|---|---|---|---|
+| 1 | 83% | 90% | 20.9 |
+| **2** | **88%** | **88%** | **31.3** |
+| 3 | ~68% | ~71% | 28.6 |
+| 4 | 68% | 71% | 33.7 |
+
+**Se eligió exactitud.** Con `pose_every=3` se llegue a 28.6 fps, pero la
+geometría queda tres fotogramas atrasada y reaparecen los falsos «caída» que
+ motivate este arreglo. Preferimos 26.5-31 fps con detección correcta a 30 fps
+con falsos positivos.
+
+Cifras finales medidas en esta máquina: motor **31.3 fps**, cámara en vivo por
+HTTP **24.2 fps** (41 ms por ciclo). **RQNF01 no se cumple en la cámara** y
+queda dicho; la latencia (<500 ms) sí se cumple con holgura.
+
+## La lección
+
+Durante el diagnóstico se sospechó primero de la ruta de código, porque
+efectivamente había una inconsistencia real entre cómo calculaba el riesgo la
+ruta de vídeo (`draw=True`) y la de cámara (`draw=False`): el móvil salía
+`CONTEXTO` en una y `MEDIO` en la otra. Se corrigió al unificar ambas, pero
+**no era la causa** que el usuario reportaba. Los datos del historialFestival
+apuntaron al clasificador, no al código de reporte.
