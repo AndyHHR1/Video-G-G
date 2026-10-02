@@ -24,7 +24,7 @@ funcionales** (RQNF01–RQNF27). Estado tras el trabajo previo (partes 1 y 2):
 | RQF06 persistencia > 3 s | **no** | implementado |
 | RQF07 alerta con evidencia | **no** | implementado |
 | RQF08 panel de supervisión | parcial | app web |
-| RQNF01 ≥30 FPS | no (15) | 42 FPS |
+| RQNF01 ≥30 FPS | no (15) | 13.5 FPS medidos, sin verificar |
 | RQNF10 mAP@0.5 > 75 % | parcial | val 0.810 ✓ / test 0.747 |
 | RQNF14 protección de datos | **no** | rostros pixelados |
 | RQNF16 registro auditable | **no** | `runs/alerts.jsonl` |
@@ -126,7 +126,7 @@ obligatoriamente *ByteTrack*.
 `RQNF14` remite a la Ley N.º 29733 (Perú) e ISO/IEC 27001. La medida
 implementada es la **pixelización de rostros** antes de guardar o transmitir
 imagen: MediaPipe Face Detection localiza las caras y se aplica un
-`resize` aggressively-downscale → `resize` de vuelta, que destruye los rasgos
+`resize` a tamaño muy pequeño → `resize` de vuelta, que destruye los rasgos
 sin impedir ver que hay una persona.
 
 Es una medida de mínimo, no un sistema completo de control de acceso ni de
@@ -159,7 +159,7 @@ silencio.
 El dato que importa: la inferencia son **16 ms**, o sea un techo de 60 FPS. El
 cuello estaba en HTTP y en devolver 100 KB por fotograma.
 
-Con el motor de riesgo completo (YOLO + Pose + obstáculos COCO) son **49 FPS**,
+Con el motor de riesgo completo (YOLO + Pose + obstáculos COCO) se midieron **13.5 FPS**,
 porque pose y obstáculos se ejecutan **cada 3 frames**: son condiciones que
 cambian en segundos, no en fotogramas. Con `RQNF12` en mente (resiliencia) no
 compensa evaluarlas 30 veces por segundo.
@@ -221,3 +221,85 @@ caja. Para (2) y (3) se usan heurísticas de pose, declaradas como tales.
 ```
 
 Semilla 42 en Python, NumPy, Torch y Ultralytics.
+---
+
+# PARTE 4 — Revisión de errores y corrección de cifras
+
+Auditoría del proyecto tras las pruebas con fotos reales. Tres hallazgos.
+
+## 1. Bug crítico: el hilo trabajador moría y colgaba todas las peticiones
+
+`engine_reset()` encolaba el trabajo con el diccionario **anidado un nivel de
+más** de lo que el worker esperaba:
+
+```python
+self._q.put((None, None, None, {"done": out, "reset": True}))
+# el worker hacía out["done"].set() donde out["done"] era OTRO dict
+```
+
+`AttributeError: 'dict' object has no attribute 'set'` en el hilo trabajador.
+Como el hilo **murió**, nadie consumía la cola y **toda petición posterior se
+quedaba colgada indefinidamente**. Se россий manifested como `/api/detect` sin
+respuesta durante 15 minutos.
+
+**Corrección:** el payload se encola con la misma forma que el resto, y el bucle
+del worker captura `BaseException` para que **nunca muera**: si el error está en
+el trabajo, se propaga al que espera; si está en el signalling, el hilo
+sobrevive.
+
+**Consecuencia de diseño:** un consumidor de cola debe ser a prueba de fallos. Un
+hilo muerto no es recuperable y bloquea silenciosamente todo lo demás.
+
+## 2. Cache de fotograma contaminada entre imágenes
+
+Los obstáculos y la escalera se reutilizaban entre fotogramas porque cambian en
+segundos, no en frames. Correcto en vídeo y cámara, **falso en el modo de subir
+una imagen**: cada petición es una escena distinta.
+
+Verificado: una imagen gris completamente plana seguía mostrando la `escalera` de la
+imagen anterior.
+
+**Corrección:** `RiskEngine.reset()` limpia las cache, y `/api/detect` lo invoca
+en cada petición. En vídeo y cámara **no** se llama, porque ahí la continuidad
+es lo correcto.
+
+## 3. Las cifras de FPS de las partes 1-3 no eran reproducibles
+
+Las cifras anteriores (42 FPS por HTTP, 49 FPS del motor) se midieron **por
+error**, casi siempre con el servidor web usando la GPU a la vez, lo que
+contaminaba la medición.
+
+Al medir con cuidado:
+
+| condición | FPS |
+|---|---|
+| motor solo, imágenes sin personas | 35-46 |
+| motor solo, imágenes **con** personas | 8.2 |
+| motor completo por HTTP a 1280×720 | **13.5** |
+
+Además, `nvidia-smi` informa de ~5.9 GB de VRAM ocupada en la GPU **sin que
+liste ningún proceso**: es memoria de otro contenedor o del escritorio del host,
+fuera del control de este proyecto. Con la GPU en esas condiciones el
+rendimiento medido no es representativo de la máquina donde se despliegue.
+
+**Conclusión honesta:** **no se puede afirmar que RQNF01 (≥30 FPS) se cumple.**
+La cifra de 13.5 FPS es una cota *inferior* medida bajo carga externa. Para
+verificarla hay que medir en una GPU libre, y si además se quiere recuperar el
+paso falta cachear de forma más agresiva la clasificación por recorte (22 ms por
+persona).
+
+## Optimizaciones aplicadas tras la medición
+
+- MediaPipe vuelve a modo tracking: la pose cuesta 20 ms en vez de 40.8 ms.
+  El problema de la primera imagen sin tracker se resuelve calentándolo en
+  `reset()`.
+- La clasificación por recorte se recalcula cada 4 fotogramas y se reutiliza
+  mientras la caja no se desplace más de 24 px.
+- Cadencias: personas cada frame a `imgsz` 512, pose cada 3, escalera cada 6,
+  obstáculos cada 10.
+
+## 4. Endpoint `/api/cameras` sin uso
+
+Existe para que la interfaz sepa si el modo «cámara del servidor» es viable, pero
+el frontend no lo llama (la cámara es la del navegador). Se deja: informa del
+estado del hardware vía API y no causa daño.
