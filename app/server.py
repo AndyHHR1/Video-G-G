@@ -151,10 +151,25 @@ class Inferencer:
                 return
             image, conf, imgsz, out = job
             try:
-                out["value"] = self._job(image, conf, imgsz)
-            except Exception as exc:              # noqa: BLE001
-                out["error"] = exc
-            finally:
+                if out.get("reset"):
+                    self._engine.reset()
+                    out["value"] = None
+                else:
+                    out["value"] = self._job(image, conf, imgsz)
+            except BaseException as exc:          # noqa: BLE001
+                # `finally` en vez de `except`: si `out["done"]` no fuera un
+                # Event, el `.set()` lanzaba AttributeError y el hilo
+                # terminaba. A partir de ahi TODAS las peticiones se
+                # quedaban colgadas para siempre, porque nadie consumia la
+                # cola. Con BaseException el hilo sobrevive a cualquier fallo.
+                try:
+                    out["error"] = exc
+                finally:
+                    try:
+                        out["done"].set()
+                    except Exception:
+                        pass
+            else:
                 out["done"].set()
 
     def _job(self, image, conf, imgsz):
@@ -178,6 +193,20 @@ class Inferencer:
         return out, result, detections, {
             "predict": round(t_predict, 1), "draw": round(t_draw, 1),
         }
+
+    def engine_reset(self) -> None:
+        """Pide al motor limpiar sus caches desde su propio hilo.
+
+        El trabajo se encola con la MISMA forma que el resto: el cuarto
+        elemento del tuple es el diccionario de resultado y su clave "done"
+        debe ser el Event. Antes se encolaba un dict anidado
+        ({"done": {"done": Event}}) y el worker hacia `out["done"].set()`
+        sobre un dict: AttributeError que MATABA el hilo para siempre y
+        dejaba cualquier peticion posterior colgada indefinidamente.
+        """
+        out = {"done": threading.Event(), "reset": True}
+        self._q.put((None, None, None, out))
+        out["done"].wait()
 
     def detect(self, image: np.ndarray, conf: float, imgsz: int):
         """Encola el trabajo y espera el resultado."""
@@ -324,6 +353,9 @@ def api_detect():
     if image is None:
         return jsonify({"error": "no se pudo decodificar la imagen"}), 400
 
+    # Cada peticion de imagen es una escena nueva: se limpian las cache de
+    # fotograma para que no hereden obstaculos ni escalera de la imagen previa.
+    _inferencer.engine_reset()
     t0 = time.perf_counter()
     annotated, result, dets, timing = _inferencer.detect(image, conf, imgsz)
     t_all = (time.perf_counter() - t0) * 1000

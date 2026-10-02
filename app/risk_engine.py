@@ -172,9 +172,10 @@ class RiskEngine:
         conf: float = 0.25,
         enable_pose: bool = True,
         anonymize: bool = True,
-        pose_every: int = 2,
+        pose_every: int = 3,
         obstacle_every: int = 10,
         stairs_every: int = 6,
+        classify_every: int = 4,
         people_every: int = 1,
         person_imgsz: int = 512,
         person_conf: float = 0.30,
@@ -188,6 +189,7 @@ class RiskEngine:
         self.pose_every = pose_every
         self.obstacle_every = obstacle_every
         self.stairs_every = stairs_every
+        self.classify_every = classify_every
         self.people_every = people_every
         self.person_imgsz = person_imgsz
         self.person_conf = person_conf
@@ -198,6 +200,10 @@ class RiskEngine:
         # `pose_every`): sin esta cache, en los frames intermedios no habria
         # keypoints y la clasificacion caeria a `persona` generica.
         self._last_geom: str | None = None
+        # Postura ya clasificada por el modelo, reutilizada unos fotogramas:
+        # reclasificar a 30 fps cuesta 22 ms por persona y la postura no cambia
+        # tan rapido.
+        self._last_class: tuple | None = None
         self._last_stairs: list = []
         self._last_obstacles: list = []
 
@@ -228,12 +234,13 @@ class RiskEngine:
         self.enable_pose = enable_pose
         self.pose = None
         if enable_pose:
-            # static_image_mode=True: deteccion por fotograma. Con False el
-            # tracker no inicializa en la primera imagen de una secuencia y
-            # no devuelve pose; ademas la imagen puede venir de un fichero
-            # suelto y no de un video continuo.
+            # Modo TRACKING (False) y no deteccion por fotograma: medido, la
+            # pose cuesta 40.8 ms con static_image_mode=True frente a 20 ms
+            # con False. El problema del tracker es que la primera imagen de
+            # una secuencia no devuelve pose, y eso lo resuelve el
+            # calentamiento de `reset()`.
             self.pose = mp.solutions.pose.Pose(
-                static_image_mode=True,
+                static_image_mode=False,
                 model_complexity=0,
                 min_detection_confidence=0.3,
                 min_tracking_confidence=0.3,
@@ -586,6 +593,34 @@ class RiskEngine:
         return "persona_erguida"
 
     # --- Localizacion con COCO + clasificacion propia ---------------------- #
+    def reset(self) -> None:
+        """Limpia las cache de fotograma.
+
+        Los resultados de `obstaculos` y `escalera` se reutilizan entre
+        fotogramas porque cambian en segundos, no en frames. Eso es correcto
+        en video y en camara, pero en el modo de subir una imagen cada
+        peticion es una escena distinta: sin limpiar, una imagen gris
+        heredaba la escalera de la imagen anterior. Verificado.
+        """
+        self._last_people = []
+        self._last_stairs = []
+        self._last_obstacles = []
+        self._last_geom = None
+        self._last_class = None
+
+    def warm_pose(self, frame: np.ndarray) -> None:
+        """Primera llamada a la pose, que en modo tracking no devuelve nada.
+
+        Su resultado se descarta: solo sirve para que el tracker quede
+        inicializado, de modo que el segundo fotograma ya de keypoints.
+        """
+        if self.pose is None:
+            return
+        try:
+            self.pose.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+        except Exception:
+            pass
+
     def _find_people(self, frame: np.ndarray) -> list[list[int]]:
         """Detecta personas con el modelo COCO de 80 clases.
 
@@ -737,8 +772,19 @@ class RiskEngine:
         if pose:
             self._last_geom = self._postura_por_geometria(pose)
         geom = self._last_geom
+        # La clasificacion por recorte se recalcula cada `classify_every`
+        # fotogramas y se reutiliza mientras tanto: son 22 ms por persona y la
+        # postura no cambia tan rapido. Solo se reutiliza si la caja no se ha
+        # desplazado mas de 24 px, para no arrastrar el criterio a otra persona.
+        run_class = ((self._frame_no % max(1, self.classify_every)) == 0
+                     or self._last_class is None)
         for box in people:
-            name, conf_p = self._classify_person(frame, box)
+            if run_class or not self._last_class \
+                    or abs(self._last_class[0][0] - box[0]) > 24:
+                name, conf_p = self._classify_person(frame, box)
+                self._last_class = (tuple(box), name, conf_p)
+            else:
+                name, conf_p = self._last_class[1], self._last_class[2]
             origen = "modelo"
             if not name and geom:
                 name, conf_p, origen = geom, 0.55, "geometria de pose"
