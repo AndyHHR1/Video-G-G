@@ -19,6 +19,20 @@ weights/
 # --- Pesos de modelos preentrenados descargados ---
 *.pt
 
+# --- Videos ---
+# Material de trabajo temporal: clips propios que se usan para extraer
+# fotogramas y despues se eliminan. NUNCA deben versionarse: son escenas
+# reales de personas y ademas pesan mucho.
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+*.m4v
+*.mpeg
+*.mpg
+*.wmv
+
 # --- Estado local del agente (Kilo) ---
 # No forma parte del entregable: contiene configuracion del editor y punteros
 # a worktrees, que jamas deben versionarse.
