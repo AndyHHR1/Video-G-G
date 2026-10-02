@@ -419,3 +419,74 @@ escalera vista de frente. Los vídeos del usuario siguen siendo la vía.
 
 El script `build_kaggle_variant.py` se conserva: documenta cómo se evaluó y
 permite reproducir el experimento, pero no se usa.
+
+---
+
+# PARTE 7 — Vídeos propios de escalera (DESCARTADO por auto-etiquetado)
+
+Punto de retorno previo: **`git tag v0.3-estable`**.
+
+## Qué se hizo
+
+4 clips (46 s, 1154 frames) con escenas reales: una persona **cayendo por una
+escalera** vista en cenital, una **caída con visión nocturna** en CCTV de
+escalera, una persona bajando escaleras, y una caminando sobre césped (sin
+escalera).
+
+Diseño anti-sobreajuste, aplicado:
+
+1. **Reparto por VÍDEO, nunca por fotograma.** 2 clips a train, 1 a val, 1 a
+   test. Un clip entero cae en un único split.
+2. **Cadencia de submuestreo** (1 de cada 5 frames): 232 fotogramas de 1154.
+   Los frames contiguos son casi idénticos y multiplicar su número sube el
+   riesgo de memorización sin aportar información.
+3. **Techo de cajas por clase** ya existente en `train.py`, de modo que
+   aunque los clips sumaran, no pueden dominar el gradiente.
+4. **El test del dataset base quedó intacto** (1293 labels, byte a byte), así
+   que la comparación con el modelo entregado es justa. Los fotogramas del
+   clip de test se guardaron aparte, en `domains/`, para medir dominio real.
+
+## Resultado: empeora en las dos medidas
+
+| modelo | val mAP50 | test mAP50 | acierto en clip real |
+|---|---|---|---|
+| base (entregado) | **0.810** | **0.747** | **53/68 (78%)** |
+| + vídeos propios | 0.716 | 0.639 | 36/68 (53%) |
+
+## Por qué falló, y la lección
+
+**El fallo de método fue mío: etiqueté los fotogramas con el mismo modelo que
+iba a evaluar después.** Eso es un bucle de auto-entrenamiento, y encima con
+sesgo de selección:
+
+- De 232 fotogramas, **83 se descartaron** porque el motor no identificó
+  ninguna persona. Es decir, se conservaron **precisamente los fotogramas que
+  el modelo ya acertaba**, y se tiraron los que no sabía. Entrenar con eso no
+  aporta información nueva: refuerza lo que ya sabía.
+- Las etiquetas arrastran por tanto el mismo error que se quiere corregir. La
+  tasa de acierto del modelo nuevo sobre el clip cae del 78% al 53%: el
+  entrenamiento con pseudo-etiquetas propias empeoró precisamente el caso que
+  se quería mejorar.
+
+**Conclusión.** Los vídeos son buenos datos, pero **no sirven etiquetados por
+el modelo que hay que corregir**. Harían falta etiquetas hechas a mano o por
+otra persona. Con cuatro clips, además, el salto sería pequeño: son 80
+fotogramas frente a 2662 de la base.
+
+El pipeline queda igual de bueno o mejor: los scripts `extract_frames.py` y
+`label_video_frames.py` se conservan para documentar el intento y son
+reproducibles, pero **el proyecto no depende de ellos** y los vídeos se han
+borrado del disco. No se versionaron nunca.
+
+## Comparación con el resto de intentos
+
+| intento | resultado |
+|---|---|
+| Ampliar primeros planos sintéticos | test 0.706 → 0.692 (peor) |
+| Quitar Le2i `Lie` | salvó la pre-caída: 0.920 → 0.267 sin él |
+| Dataset sintético de Kaggle | val 0.810 → 0.696 (peor) |
+| **Vídeos propios, auto-etiquetados** | **val 0.810 → 0.716 (peor)** |
+
+Cuatro intentos, cuatro que empeoran. Todos compartían un mismo origen del
+problema: **ninguno.connía datos que el modelo no puede verificar por sí
+mismo**. El cuello de botella no es la cantidad de datos, es su fiabilidad.
