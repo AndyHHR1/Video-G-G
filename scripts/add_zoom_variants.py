@@ -47,7 +47,7 @@ DATA = ROOT / "datasets" / "combined"
 
 # Clases que representan una persona. `escalera` no se recorta porque al
 # ampliar la imagen la escalera se sale de cuadro y la etiqueta pierde sentido.
-# Taxonomia de 5 clases: la 3 es `escalera` y queda fuera.
+# Taxonomia de 6 clases: la 3 es `escalera` y queda fuera.
 PERSON_CLASSES = {0, 1, 2, 4, 5}
 
 # Fraccion del area final que debe ocupar la caja principal. Valores altos
@@ -214,9 +214,8 @@ def main() -> None:
         w.writeheader()
         w.writerows(manifest)
 
-    print(f"\nPara usarlo en el entrenamiento, añade al data.yaml:")
-    print(f"  train: images/train        # original")
-    print(f"  # + images/{out_name} mezclado (ver prepare_dataset.py --mix)")
+    print(f"\nPara usarlo en el entrenamiento, `datasets/combined/data_zoom.yaml`")
+    print(f"incluye esta carpeta automaticamente (prepare_dataset.py la escribe).")
 
 
 if __name__ == "__main__":

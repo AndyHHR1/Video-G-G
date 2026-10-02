@@ -20,15 +20,16 @@ MAPEO DE CLASES
     Fall     -> 0 persona_caido
     Lie      -> 0 persona_caido
     Stand    -> 2 persona_erguida
-    Likefall -> 4 persona_desequilibrio   <-- clase de PRE-CAIDA
+    Likefall -> 5 persona_desequilibrio   <-- clase de PRE-CAIDA
 
     Se fusionaron a proposito dos cosas:
 
-    1. La taxonomia final tiene 5 clases y NO incluye una clase `persona`
-       generica. `Caso.md` RQF03 pide discriminar el transito seguro de la
-       conducta de riesgo, y con una clase generica el modelo se colgaba en
-       ella (76% de las predicciones) sin poder expresar riesgo. Todo peaton
-       recibe una postura; uno de espaldas va de pie.
+    1. Se PROBO fusionar la clase `persona` generica dentro de
+       `persona_erguida` para forzar que todo peaton reciba una postura
+       (RQF03). Se entreno y se midio: mAP50 de test paso de 0.706 a 0.587 y
+       TODAS las clases bajaron. La fusion quedo revertida por eso; la
+       taxonomia final conserva las 6 clases y el colapso se controla con el
+       techo de cajas del recorte, no eliminando la clase.
 
     2. `Fall` y `Lie` solo entran si se usa `--self-model`. Un detector COCO
        no localiza de forma fiable a una persona tendida (sujeto muy
@@ -79,7 +80,7 @@ STRIDE = {
     "Blank": 10,
 }
 
-# Etiqueta de origen -> id de clase unificado (taxonomia de 5 clases)
+# Etiqueta de origen -> id de clase unificado (taxonomia de 6 clases)
 CLASS_MAP = {
     "Fall": 0,      # persona_caido
     "Lie": 0,       # persona_caido
@@ -88,9 +89,7 @@ CLASS_MAP = {
     "Blank": None,  # sin caja: es un negativo
 }
 
-# Clases que solo son fiables si las etiqueta el modelo del proyecto. Con un
-# detector COCO fallan porque una persona tendida esta muy escorzada.
-SELF_MODEL_ONLY = {"Fall", "Lie"}
+
 
 
 def base_video(folder: str) -> str:

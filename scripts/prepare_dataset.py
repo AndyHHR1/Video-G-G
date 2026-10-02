@@ -149,9 +149,6 @@ class Sample:
     def classes(self) -> set:
         return {c for c, *_ in self.boxes}
 
-    def label_rows(self) -> list:
-        return [f"{c} {cx} {cy} {w} {h}" for c, cx, cy, w, h in self.boxes]
-
     def __repr__(self):
         return f"<{self.out_name} boxes={len(self.boxes)} split={self.split}>"
 
@@ -234,7 +231,7 @@ class Builder:
         la misma idea que prioriza las clases minoritarias en cualquier
         problema de datos desbalanceados.
         """
-        rarity = {cid: n for cid, n in self.class_totals().items()}
+        rarity = self.class_totals()
         by_md5: dict[str, list[Sample]] = defaultdict(list)
         for s in self.samples:
             by_md5[s.src_hash].append(s)
@@ -246,9 +243,7 @@ class Builder:
                 continue
             # rarer primero; a igualdad, train antes que val antes que test
             group.sort(key=lambda s: (
-                min((rarity.get(c, 0) for c in
-                     {int(l.split()[0]) for l in
-                      s.label_rows()} or {-1}), default=0),
+                min((rarity.get(c, 0) for c in s.classes()), default=0),
                 order.get(s.split, 9),
                 s.out_name,
             ))
@@ -278,10 +273,12 @@ class Builder:
         byte. Al estar en carpetas distintas acaban en splits distintos y la
         imagen aparece a la vez en train y en val.
 
-        Aqui se comparan los md5 ya calculados y, si un mismo hash aparece en
-        varios splits, se conserva una sola copia (la de train si existe) y se
-        descarta el resto. Garantiza fuga cero por imagen, sea cual sea la
-        granularidad del agrupado.
+        RED DE SEGURIDAD. En la practica devuelve siempre 0, porque
+        `dedupe_preferring_rare_classes` se ejecuta ANTES y ya elimina todos
+        los duplicados, no solo los que cruzan splits. Se conserva por si
+        alguien cambia el orden de las dos llamadas: garantiza fuga cero por
+        imagen sea cual sea la granularidad del agrupado, sin importar quien
+        se quede con cada hash duplicado.
         """
         by_md5: dict[str, list[Sample]] = defaultdict(list)
         for s in self.samples:

@@ -150,9 +150,8 @@ class TrackState:
     """Estado temporal de una identidad seguida (RQF05 / RQF06)."""
     track_id: int
     last_seen: float
-    active: bool = True
-    risks: deque = field(default_factory=lambda: deque(maxlen=300))
     risk_since: dict = field(default_factory=dict)
+    risk_seen: set = field(default_factory=set)
     alerts: dict = field(default_factory=dict)
 
 
@@ -160,7 +159,7 @@ class RiskEngine:
     """Pipeline completo: deteccion -> pose -> contexto -> persistencia -> alerta.
 
     CADENCIAS. Con la GPU libre, el coste por fotograma CON persona se reparte
-    asi: COCO personas 17.4 ms (cada frame), MediaPipe pose 18 ms (cada 4),
+    asi: COCO personas 17.4 ms (cada 2), MediaPipe pose 18 ms (cada 4),
     clasificacion por recorte 17.4 ms (cada 4), escalera 12.9 (cada 6) y
     obstaculos 14.2 (cada 10). Medido con combinaciones:
 
@@ -210,6 +209,7 @@ class RiskEngine:
         self.person_imgsz = person_imgsz
         self.person_conf = person_conf
         self._pose_errors = 0
+        self._obstacle_errors = 0
         self._last_people: list = []
         # Postura deducida en el ultimo frame en el que se evaluo la pose.
         # La pose se calcula a una cadencia mas lenta que el frame (ver
@@ -276,9 +276,9 @@ class RiskEngine:
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         self._alert_seq = 0
 
-        # histéresis de ByteTrack tolerando la oclusión
-        self._tracker = None
-        self._tracker_ready = False
+        # El seguimiento es IoU handmade (ver `_track`), no ByteTrack: se
+        # descarto porque arrastra estado interno entre llamadas de forma
+        # fragil y obliga a construirlo con un objeto de argumentos.
 
     # ------------------------------------------------------------------ #
     # Seguimiento (RQF05)
@@ -322,7 +322,6 @@ class RiskEngine:
             if st is None:
                 st = self.tracks[tid] = TrackState(tid, now)
             st.last_seen = now
-            st.active = True
             st.bbox = det["bbox"]   # type: ignore[attr-defined]
         for tid, st in list(self.tracks.items()):
             if now - st.last_seen > OCCLUSION_SECONDS:
@@ -348,6 +347,14 @@ class RiskEngine:
         if not self.enable_pose or self.pose is None:
             return out
         res = self.pose.process(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+        if not res.pose_landmarks:
+            # MediaPipe en modo TRACKING necesita dos llamadas para devolver
+            # keypoints: la primera solo inicializa el tracker. Sin este
+            # segundo intento, el primer fotograma de cada secuencia (y tras
+            # cada `reset()`) se queda sin pose, y con ella sin la postura por
+            # geometria. Este segundo intento sustituye a un `warm_pose()`
+            # separado que se escribio y nunca llego a conectarse.
+            res = self.pose.process(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
         if not res.pose_landmarks:
             return out
         # `res.pose_landmarks` es un MENSAJE protobuf `NormalizedLandmarkList`
@@ -466,12 +473,32 @@ class RiskEngine:
     # ------------------------------------------------------------------ #
     # Persistencia y alertas (RQF06, RQF07)
     # ------------------------------------------------------------------ #
+    def _forget_stale_risks(self, active: set[tuple[int, str]]) -> None:
+        """Olvida la persistencia de los riesgos que ya no se estan viendo.
+
+        Sin esto, RQF06 (persistencia > 3 s) se puede saltar: si el riesgo
+        desaparecia un momento y volvia, `risk_since` conservaba la marca del
+        primer inicio y la alerta saltaba de inmediato.
+        """
+        for tid, st in self.tracks.items():
+            for risk in list(st.risk_since):
+                if (tid, risk) not in active:
+                    del st.risk_since[risk]
+                    st.risk_seen.discard((tid, risk))
+
     def _persist(self, tid: int, risk: str, det: dict) -> None:
         now = time.time()
         st = self.tracks.get(tid)
         if st is None:
             return
-        st.risk_since.setdefault(risk, now)
+        # `risk_since` se BORRA cuando el riesgo deja de estarse. Con
+        # `setdefault` y sin limpiar, un riesgo que desaparecia y volvia a
+        # aparecer en el mismo track_id arrastraba el tiempo de la aparicion
+        # anterior: la alerta saltaba sin los 3 s de persistencia que exige
+        # RQF06.
+        if (tid, risk) not in st.risk_seen:
+            st.risk_since[risk] = now
+            st.risk_seen.add((tid, risk))
         dur = now - st.risk_since[risk]
         last = st.alerts.get(risk, 0.0)
         # RQF06: solo se alerta tras PERSIST_SECONDS de persistencia
@@ -624,19 +651,6 @@ class RiskEngine:
         self._last_geom = None
         self._last_class = None
 
-    def warm_pose(self, frame: np.ndarray) -> None:
-        """Primera llamada a la pose, que en modo tracking no devuelve nada.
-
-        Su resultado se descarta: solo sirve para que el tracker quede
-        inicializado, de modo que el segundo fotograma ya de keypoints.
-        """
-        if self.pose is None:
-            return
-        try:
-            self.pose.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-        except Exception:
-            pass
-
     def _find_people(self, frame: np.ndarray) -> list[list[int]]:
         """Detecta personas con el modelo COCO de 80 clases.
 
@@ -738,9 +752,12 @@ class RiskEngine:
         stairs = self._last_stairs
 
         # --- postura (RQF02 2 y 3) ---
-        # La pose y los obstaculos se calculan cada `pose_every` frames: son
-        # dos inferencias mas y a 30 FPS sostenidos no caben en el presupuesto.
-        # Las condiciones que sostienen (sujeccion del pasamanos, distraccion,
+        # La pose y los obstaculos usan cadencias PROPIAS y distintas entre si
+        # (pose_every y obstacle_every): son dos inferencias mas y a 30 FPS
+        # sostenidos no caben en el presupuesto. Ninguna de las dos condiciones
+        # que miden cambia en cuatro fotogramas: sujetarse del pasamanos o
+        # dejar un objeto en un escalon tarda segundos, no frames.
+        #
         # La pose va envuelta: si falla, se pierde la señal de postura pero el
         # fotograma sigue produciendo detecciones y obstaculos. Antes un
         # TypeError aqui tumbaba `step()` entero y el endpoint devolvia 500.
@@ -772,7 +789,8 @@ class RiskEngine:
             try:
                 self._last_obstacles = self._obstacles(frame)
             except Exception as exc:       # noqa: BLE001
-                if self._pose_errors <= 3:
+                self._obstacle_errors += 1
+                if self._obstacle_errors <= 3:
                     print(f"  [aviso] deteccion de obstaculos fallo: "
                           f"{type(exc).__name__}: {exc}", flush=True)
         obstacles = self._last_obstacles
@@ -828,14 +846,17 @@ class RiskEngine:
             dets.append(det)
 
         dets = self._track(dets)
-        confirmed, preliminary = self.apply_thresholds(dets)
-
         for conf_s, box in stairs:
             dets.append({
                 "class_id": 3, "class_name": "escalera",
                 "confidence": round(conf_s, 4), "bbox": box,
                 "track_id": None, "riesgo": "CONTEXTO", "ref": "",
             })
+
+        # Los umbrales de RQF04 se aplican DESPUES de componer todas las
+        # detecciones: antes se contaban antes de anadir `escalera`, asi que
+        # los contadores que ve el cliente no cuadraban con `len(dets)`.
+        confirmed, preliminary = self.apply_thresholds(dets)
 
         # --- telefono cerca de la cabeza: RQF02 (3) confirmado por evidencia --
         # Un movil detectado por COCO no basta: puede estar suelto. Se cruza
@@ -859,6 +880,9 @@ class RiskEngine:
 
 
         # --- persistencia y alertas (RQF06, RQF07) ---
+        activos = {(d["track_id"], d["risk_type"]) for d in dets
+                   if "risk_type" in d and d["confidence"] >= CONF_PREFILTER}
+        self._forget_stale_risks(activos)
         for d in dets:
             if "risk_type" in d and d["confidence"] >= CONF_PREFILTER:
                 self._persist(d["track_id"], d["risk_type"], d)
