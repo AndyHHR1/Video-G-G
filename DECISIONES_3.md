@@ -644,3 +644,67 @@ motor** y **~24 fps en la cámara por HTTP**, con 41 ms por ciclo.
 
 RQNF01 (30 fps) no se cumple de forma sostenida en esta máquina. Se dejó
 constancia en vez de ajustar el número.
+
+---
+
+# PARTE 10 — En directo se saltaba el estado intermedio (verde → rojo)
+
+## Síntoma
+
+Subiendo un vídeo, el riesgo evoluciona como debe: verde → **ámbar** (pierde
+equilibrio) → rojo (caído). En directo salta de verde a rojo: **el estado
+intermedio no aparece**.
+
+## Causa
+
+Un candado mío en `step()`:
+
+```python
+unica = len(people) == 1
+...
+if geom and unica:      # la geometria solo si hay UNA persona
+```
+
+Los keypoints de MediaPipe describen a una sola persona, así que yo descarté la
+geometría cuando había varias detecciones. En una escalera COCO genera
+detecciones falsas con facilidad (un cartel, un reflejo, una barandilla), y en el
+historial de la parte 8 se ve `coco: 2` y `coco: 3` en varios fotogramas. Con dos
+o más detecciones:
+
+1. la geometría se apagaba, y
+2. el respaldo `if not name and geom` asignaba la postura de la pose real a
+   **cualquier** caja que el recorte no supiera clasificar, incluidas las
+   falsas.
+
+El resultado era doble: las personas reales las clasificaba el recorte —que va
+directo a `persona_caido`, sin pasar por `persona_desequilibrio`— y las
+detecciones falsas heredaban la postura de la persona real.
+
+En el vídeo la escena daba una sola detección, la geometría se activaba y el
+estado ámbar aparecía. Ahí estaba la diferencia entre vídeo y directo, y **no
+era la webcam**.
+
+## Arreglo
+
+1. Se empareja la pose con la caja de COCO que mejor encaja, por **IoU** entre
+   la caja del esqueleto completo y cada caja. Antes se comparaba un punto
+   (la cadera), y un keypoint mal located la acerca a una deteccion falsa.
+2. La geometría se aplica a esa caja concreta; las demas siguen con el recorte.
+3. Se eliminó el respaldo que repartía la geometría a cajas cualesquiera: una
+   persona inexistente ya no puede marcarse con la postura de la pose real.
+
+Verificado forzando detecciones falsas:
+
+| detecciones en el fotograma | persona real | cajas falsas |
+|---|---|---|
+| 1 | `persona_erguida` (geometría) | — |
+| 2 | `persona_desequilibrio` | `persona` (sin clasificar) |
+| 3 | `persona_desequilibrio` | `persona`, `persona` |
+
+Sin regresión: el acierto en el test set se mantiene en **88% de pie / 88% de
+caído**, y el rendimiento sin cambios (~20 fps en el motor).
+
+**Límite honesto:** la mejora de la progresión verde → ámbar → rojo depende del
+umbral de 12° y del emparejamiento, y **no se puede medir aquí** porque ningún
+dataset anota «cayéndose sin haber tocado el suelo». Corresponde al usuario
+comprobarlo con su vídeo.
