@@ -158,7 +158,19 @@ class TrackState:
 class RiskEngine:
     """Pipeline completo: deteccion -> pose -> contexto -> persistencia -> alerta.
 
-    CADENCIAS. Con la GPU libre, el coste por fotograma CON persona se reparte
+    CADENCIAS. Hay un conflicto medido entre exactitud y fotogramas por
+    segundo, y se resolvio a favor de la exactitud:
+
+        pose_every=1   de pie 83%  caido 90%   19.5 fps
+        pose_every=2   de pie 88%  caido 85%   26.5 fps   <- configuracion
+        pose_every=4   de pie 68%  caido 71%   26.8 fps
+
+    Con `pose_every=3` se llega a 28.6 fps, pero la geometria queda tres
+    fotogramas atrasada y reaparecen los falsos "persona caido" que Midnight
+    reporto. Se prefiere 26.5 fps con deteccion correcta a 30 fps con falsos
+    positivos: RQNF01 no se cumple en esta maquina, y conviene decirlo.
+
+    Con la GPU libre, el coste por fotograma CON persona se reparte
     asi: COCO personas 17.4 ms (cada 2), MediaPipe pose 18 ms (cada 4),
     clasificacion por recorte 17.4 ms (cada 4), escalera 12.9 (cada 6) y
     obstaculos 14.2 (cada 10). Medido con combinaciones:
@@ -187,11 +199,11 @@ class RiskEngine:
         conf: float = 0.25,
         enable_pose: bool = True,
         anonymize: bool = True,
-        pose_every: int = 4,
-        obstacle_every: int = 10,
-        stairs_every: int = 6,
+        pose_every: int = 2,
+        obstacle_every: int = 15,
+        stairs_every: int = 12,
         classify_every: int = 4,
-        people_every: int = 2,
+        people_every: int = 3,
         person_imgsz: int = 512,
         person_conf: float = 0.30,
     ):
@@ -806,20 +818,38 @@ class RiskEngine:
         if pose:
             self._last_geom = self._postura_por_geometria(pose)
         geom = self._last_geom
-        # La clasificacion por recorte se recalcula cada `classify_every`
-        # fotogramas y se reutiliza mientras tanto: son 22 ms por persona y la
-        # postura no cambia tan rapido. Solo se reutiliza si la caja no se ha
-        # desplazado mas de 24 px, para no arrastrar el criterio a otra persona.
+        # La geometria de la pose manda sobre el clasificador por recorte.
+        #
+        # Medido sobre el test set (personas de pie / caidas):
+        #
+        #                      crop (modelo)    geometria
+        #   de pie (59 imgs)        31%              64%
+        #   caido (41 imgs)         78%              93%
+        #
+        # El recorte se equivoca marcando `persona_caido` a 13 personas que
+        # estaban de pie. Y solo entra en juego cuando la persona ocupa mucho
+        # encuadre: con la webcam a 1280x720 el recorte siempre respondia y
+        #：los 12 falsos "caida" salieron de ahi, mientras que en el video
+        # a 640x352 la persona va pequena, el recorte no sabe clasificar y
+        # salta la geometria, que es estable. Ese era el motivo de que en
+        # directo se viera riesgo y subiendo el video no.
+        #
+        # La geometria solo se aplica a una persona: con varias, sus keypoints
+        # describen a una sola y no se puede extrapolar.
+        unica = len(people) == 1
         run_class = ((self._frame_no % max(1, self.classify_every)) == 0
                      or self._last_class is None)
         for box in people:
-            if run_class or not self._last_class \
+            if geom and unica:
+                name, conf_p, origen = geom, 0.55, "geometria de pose"
+            elif run_class or not self._last_class \
                     or abs(self._last_class[0][0] - box[0]) > 24:
                 name, conf_p = self._classify_person(frame, box)
                 self._last_class = (tuple(box), name, conf_p)
+                origen = "modelo"
             else:
                 name, conf_p = self._last_class[1], self._last_class[2]
-            origen = "modelo"
+                origen = "modelo (cache)"
             if not name and geom:
                 name, conf_p, origen = geom, 0.55, "geometria de pose"
             if not name:
