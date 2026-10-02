@@ -265,8 +265,13 @@ def encode_jpeg(image: np.ndarray, quality: int = 82) -> bytes:
 # --------------------------------------------------------------------------- #
 def summarise(detections: list[dict]) -> dict:
     """Traduce las detecciones a un veredicto de riesgo segun `Caso.md`."""
-    counts = Counter(d["class_name"] for d in detections)
-    risks = {d["risk"] for d in detections if d["risk"] not in ("CONTEXTO", "NEUTRO")}
+    # `detections` mezcla cajas de YOLO (con `class_name`), obstaculos y
+    # señales de postura (que traen `tipo` en su lugar). Antes se accedia
+    # `class_name` a pelo y reventaba con KeyError en cuanto habia un obstaculo.
+    counts = Counter(d.get("class_name") or d.get("tipo", "?")
+                     for d in detections)
+    risks = {d["risk"] for d in detections
+             if d.get("risk") not in ("CONTEXTO", "NEUTRO", None)}
     level = max(risks, key=lambda r: RISK_ORDER.get(r, 0), default="BAJO")
 
     notes = {
@@ -278,6 +283,7 @@ def summarise(detections: list[dict]) -> dict:
     return {
         "n": len(detections),
         "level": level,
+        "riesgo": level,
         "counts": dict(counts),
         "message": notes.get(level, notes["BAJO"]),
     }
@@ -362,6 +368,12 @@ def api_frame():
         return jsonify({
             "detections": dets,
             "summary": summarise(dets),
+            "riesgo": result["riesgo"],
+            "postura": result["postura"],
+            "obstaculos": result["obstaculos"],
+            "alertas": result["alertas"],
+            "tracks": result["tracks"],
+            "sistema": result["sistema"],
             "timing": timing,
             "image": encode_jpeg(annotated, quality=72).hex(),
         })
@@ -380,6 +392,12 @@ def api_frame():
             for d in dets
         ],
         "summary": summarise(dets),
+        "riesgo": result["riesgo"],
+        "postura": result["postura"],
+        "obstaculos": result["obstaculos"],
+        "alertas": result["alertas"],
+        "tracks": result["tracks"],
+        "sistema": result["sistema"],
         "timing": timing,
         "size": [w, h],
     })
@@ -426,6 +444,29 @@ def api_cameras():
     return jsonify({"server_has_camera": bool(found), "devices": found})
 
 
+def _transcode_h264(src: Path, dst: Path) -> tuple[bool, str]:
+    """Recodifica a H.264 con el ffmpeg empaquetado en imageio-ffmpeg.
+
+    `libx264` con `+faststart` deja el indice al principio del archivo, que es
+    lo que permite empezar a reproducir antes de que termine de descargarse.
+    """
+    try:
+        import subprocess
+
+        import imageio_ffmpeg
+        exe = imageio_ffmpeg.get_ffmpeg_exe()
+        r = subprocess.run(
+            [exe, "-y", "-loglevel", "error", "-i", str(src),
+             "-c:v", "libx264", "-preset", "veryfast", "-crf", "24",
+             "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(dst)],
+            capture_output=True, text=True, timeout=600,
+        )
+        return (r.returncode == 0 and dst.is_file()
+                and dst.stat().st_size > 0, r.stderr[-200:])
+    except Exception as exc:       # noqa: BLE001
+        return False, str(exc)
+
+
 @app.post("/api/video")
 def api_video():
     if "file" not in request.files:
@@ -459,13 +500,17 @@ def api_video():
     # Codec de salida.
     #
     # OpenCV escribe `mp4v` (MPEG-4 Part 2) y los navegadores NO lo reproducen:
-    # se les muestra un reproductor con boton de play y pantalla negra. Este
-    # build de OpenCV no trae codificador H.264 (`avc1` no abre), y no hay
-    # ffmpeg en el sistema, asi que la unica salida viable es WebM con VP8,
-    # que Chrome, Firefox y Edge reproducen de forma nativa.
-    out_tmp = Path(tempfile.gettempdir()) / f"out_{uuid.uuid4().hex}.webm"
+    # sale un reproductor con boton de play y pantalla negra.
+    #
+    # Este build de OpenCV (4.10, fijado por el conflicto con MediaPipe) no
+    # trae ningun codificador que el navegador acepte: VP8 y VP9 abren el
+    # VideoWriter pero escriben archivo vacio, y H.264 no existe. La solucion
+    # es escribir con OpenCV y recodificar con el ffmpeg que trae
+    # `imageio-ffmpeg`, que si incluye libx264.
+    out_tmp = Path(tempfile.gettempdir()) / f"raw_{uuid.uuid4().hex}.mp4"
+    final_tmp = Path(tempfile.gettempdir()) / f"out_{uuid.uuid4().hex}.mp4"
     writer = cv2.VideoWriter(
-        str(out_tmp), cv2.VideoWriter_fourcc(*"VP80"), fps, (w, h)
+        str(out_tmp), cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h)
     )
     if not writer.isOpened():
         cap.release()
@@ -483,24 +528,33 @@ def api_video():
             annotated, result, _d, _t = _inferencer.detect(frame, conf, imgsz)
             t_infer += time.perf_counter() - t0
             frames += 1
-            total_counts.update(d["class_name"] for d in dets)
+            total_counts.update(x.get("class_name") or x.get("tipo", "?")
+                                 for x in _d)
+            total_counts.update(o["tipo"] for o in result.get("obstaculos", []))
             writer.write(annotated)
             if frames % 200 == 0:
                 print(f"  {frames} frames...", flush=True)
 
         cap.release()
         writer.release()
-        payload = out_tmp.read_bytes() if out_tmp.is_file() else b""
+        # OpenCV deja MPEG-4 Part 2, que ningun navegador reproduce: se
+        # recodifica a H.264, que si es universal.
+        ok, err = _transcode_h264(out_tmp, final_tmp)
+        if not ok:
+            print(f"  [aviso] ffmpeg fallo ({err}); se devuelve el intermedio")
+        payload = (final_tmp if final_tmp.is_file() else out_tmp)
+        payload = payload.read_bytes() if payload.is_file() else b""
     finally:
         tmp.unlink(missing_ok=True)
         out_tmp.unlink(missing_ok=True)
+        final_tmp.unlink(missing_ok=True)
 
     if frames == 0 or not payload:
         return jsonify({"error": "el video no contenía frames utilizables"}), 400
 
     return send_file(
-        io.BytesIO(payload), mimetype="video/webm", as_attachment=True,
-        download_name="resultado.webm",
+        io.BytesIO(payload), mimetype="video/mp4", as_attachment=True,
+        download_name="resultado.mp4",
     )
 
 

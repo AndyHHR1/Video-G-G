@@ -43,6 +43,12 @@ import numpy as np
 # --------------------------------------------------------------------------- #
 CONF_PREFILTER = 0.75      # RQF04: umbral de pre-filtrado
 CONF_CONFIRM = 0.85        # RQF04: umbral de confirmacion
+# Los umbrales de RQF04 gobiernan la CONFIRMACION de un riesgo de persona, no
+# la deteccion cruda de un objeto. Una mochila o una botella sobre un escalon
+# no llega a 0.75 de confianza: son objetos pequenos y parcialmente ocultos.
+# Con 0.75 el detector de obstaculos no encontraba practicamente nada, que es
+# exactamente el fallo reportado.
+CONF_OBSTACLE = 0.35
 PERSIST_SECONDS = 3.0      # RQF06: persistencia minima
 OCCLUSION_SECONDS = 1.0    # RQF05: oclusion tolerada
 ALERT_COOLDOWN = 15.0      # evita rafaga de alertas repetidas
@@ -83,10 +89,13 @@ SAFE_CLASSES = {"persona_erguida"}
 # Objetos de COCO que, si aparecen sobre la escalera, son obstáculos.
 # Un cliente con el movil en la mano NO es un obstaculo; por eso `cell phone`
 # queda fuera de esta lista y se trata aparte como distraccion.
+# Mobiliario (silla, carrito) queda FUERA a proposito: no es un objeto
+# abandonado sobre un escalon, y con el umbral bajo de deteccion aparecia como
+# falso positivo constante en interiores.
 OBSTACLE_CLASSES = {
     "backpack": "mochila", "handbag": "bolso", "suitcase": "maleta",
     "bottle": "botella", "book": "libro", "box": "caja",
-    "chair": "silla", "traffic cone": "cono", "cart": "carrito",
+    "traffic cone": "cono",
 }
 
 RISK_COLOR = {
@@ -151,6 +160,7 @@ class RiskEngine:
         self.anonymize = anonymize
         self.pose_every = pose_every
         self._last_obstacles: list = []
+        self._pose_errors = 0
 
         # --- RQF02: detector de personas y escalera -----------------------
         self.det = YOLO(risk_weights)
@@ -270,70 +280,76 @@ class RiskEngine:
         res = self.pose.process(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
         if not res.pose_landmarks:
             return out
+        # `res.pose_landmarks` es un MENSAJE protobuf `NormalizedLandmarkList`
+        # con los puntos de UNA sola persona (MediaPipe corre con num_poses=1).
+        # No es ni iterable ni subscriptable: hay que bajar a su campo
+        # `.landmark`, que si es un `RepeatedCompositeContainer` de 33 puntos.
+        # Iterarlo directamente lanza TypeError y tumba el fotograma entero,
+        # con lo que se pierden tambien las detecciones y los obstaculos ya
+        # calculados.
+        lm = res.pose_landmarks.landmark
         h, w = image.shape[:2]
-        for pl in res.pose_landmarks:
-            lm = pl.landmark
-            def p(i):
-                return lm[i] if i < len(lm) else None
-            nose, ls, rs = p(self.NOSE), p(self.LS), p(self.RS)
-            lw, rw = p(self.LW), p(self.RW)
-            lh, rh = p(self.LH), p(self.RH)
-            lk, rk = p(self.LK), p(self.RK)
-            if not all(x is not None for x in (nose, ls, rs, lw, rw)):
-                continue
+        def p(i):
+            return lm[i] if i < len(lm) else None
+        nose, ls, rs = p(self.NOSE), p(self.LS), p(self.RS)
+        lw, rw = p(self.LW), p(self.RW)
+        lh, rh = p(self.LH), p(self.RH)
+        lk, rk = p(self.LK), p(self.RK)
+        if not all(x is not None for x in (nose, ls, rs, lw, rw)):
+            return out      # pose incompleta: no hay nada que concluir
 
-            signals = []
-            # --- RQF02 (2): no usa el pasamanos ---
-            # el pasamanos esta a la altura de la cadera/codo. Si ninguna
-            # muñeca sube por encima de la altura del hombro, no hay agarre.
-            shoulder_y = (ls.y + rs.y) / 2
-            wrist_high = min(lw.y, rw.y) < shoulder_y - 0.02
-            # un brazo muy écartado del tronco tambien indica que no se agarra
-            span = abs(ls.x - rs.x) * w
-            arm_out = (abs(lw.x - ls.x) * w) > span * 1.2
-            if not wrist_high and arm_out:
-                signals.append({
-                    "tipo": "sin_pasamanos", "conf": 0.55,
-                    "detalle": "ninguna muñeca a la altura de la barandilla",
-                })
+        signals = []
+        # --- RQF02 (2): no usa el pasamanos ---
+        # el pasamanos esta a la altura de la cadera/codo. Si ninguna
+        # muñeca sube por encima de la altura del hombro, no hay agarre.
+        shoulder_y = (ls.y + rs.y) / 2
+        wrist_high = min(lw.y, rw.y) < shoulder_y - 0.02
+        # un brazo muy écartado del tronco tambien indica que no se agarra
+        span = abs(ls.x - rs.x) * w
+        arm_out = (abs(lw.x - ls.x) * w) > span * 1.2
+        if not wrist_high and arm_out:
+            signals.append({
+                "tipo": "sin_pasamanos", "conf": 0.55,
+                "detalle": "ninguna muñeca a la altura de la barandilla",
+            })
 
-            # --- RQF02 (3): distraccion (movil o lectura) ---
-            head_tilt = abs(nose.x - (ls.x + rs.x) / 2)
-            hand_at_head = (
-                math.hypot((lw.x - nose.x) * w, (lw.y - nose.y) * h) < 0.22 * w
-                or math.hypot((rw.x - nose.x) * w, (rw.y - nose.y) * h) < 0.22 * w
-            )
-            if head_tilt > 0.06 and hand_at_head:
-                signals.append({
-                    "tipo": "distraccion", "conf": 0.6,
-                    "detalle": "cabeza inclinada con mano junto a la cara",
-                })
-            elif hand_at_head and lw.y < shoulder_y:
-                signals.append({
-                    "tipo": "distraccion", "conf": 0.45,
-                    "detalle": "mano a la altura de la cabeza",
-                })
+        # --- RQF02 (3): distraccion (movil o lectura) ---
+        head_tilt = abs(nose.x - (ls.x + rs.x) / 2)
+        hand_at_head = (
+            math.hypot((lw.x - nose.x) * w, (lw.y - nose.y) * h) < 0.22 * w
+            or math.hypot((rw.x - nose.x) * w, (rw.y - nose.y) * h) < 0.22 * w
+        )
+        if head_tilt > 0.06 and hand_at_head:
+            signals.append({
+                "tipo": "distraccion", "conf": 0.6,
+                "detalle": "cabeza inclinada con mano junto a la cara",
+            })
+        elif hand_at_head and lw.y < shoulder_y:
+            signals.append({
+                "tipo": "distraccion", "conf": 0.45,
+                "detalle": "mano a la altura de la cabeza",
+            })
 
-            # --- tambaleo ---
-            lean = 0.0
-            if lh and rh:
-                hip_mid = (lh.x + rh.x) / 2
-                lean = abs(nose.x - hip_mid)
-            knee_asym = abs((lk.y - lh.y) if (lk and lh) else 0) - \
-                abs((rk.y - rh.y) if (rk and rh) else 0)
-            if lean > 0.09 or abs(knee_asym) > 0.10:
-                signals.append({
-                    "tipo": "tambaleo", "conf": 0.5,
-                    "detalle": f"inclinación tronco {lean:.2f}, asimetría rodillas {knee_asym:.2f}",
-                })
+        # --- tambaleo ---
+        lean = 0.0
+        if lh and rh:
+            hip_mid = (lh.x + rh.x) / 2
+            lean = abs(nose.x - hip_mid)
+        knee_asym = abs((lk.y - lh.y) if (lk and lh) else 0) - \
+            abs((rk.y - rh.y) if (rk and rh) else 0)
+        if lean > 0.09 or abs(knee_asym) > 0.10:
+            signals.append({
+                "tipo": "tambaleo", "conf": 0.5,
+                "detalle": f"inclinación tronco {lean:.2f}, asimetría rodillas {knee_asym:.2f}",
+            })
 
-            if signals:
-                out.append({
-                    "landmarks": [(lm[i].x, lm[i].y) for i in
-                                  (self.NOSE, self.LS, self.RS, self.LW, self.RW,
-                                   self.LH, self.RH)],
-                    "signals": signals,
-                })
+        if signals:
+            out.append({
+                "landmarks": [(lm[i].x, lm[i].y) for i in
+                              (self.NOSE, self.LS, self.RS, self.LW, self.RW,
+                               self.LH, self.RH)],
+                "signals": signals,
+            })
         return out
 
     # ------------------------------------------------------------------ #
@@ -342,7 +358,7 @@ class RiskEngine:
     def _obstacles(self, image: np.ndarray) -> list[dict]:
         """Detecta objetos abandonados sobre la escalera con un modelo COCO."""
         res = self.obs.predict(
-            image, conf=CONF_PREFILTER, iou=0.5, device=self.device, verbose=False
+            image, conf=CONF_OBSTACLE, iou=0.5, device=self.device, verbose=False
         )[0]
         out = []
         if res.boxes is None:
@@ -506,7 +522,20 @@ class RiskEngine:
         # objetos en el escalon) cambian en segundos, no en fotogramas.
         self._frame_no = getattr(self, "_frame_no", 0) + 1
         run_extras = (self._frame_no % max(1, self.pose_every)) == 0
-        pose = self._analyse_pose(frame) if run_extras else []
+        # La pose va envuelta: si falla, se pierde la señal de postura pero el
+        # fotograma sigue produciendo detecciones y obstaculos. Antes un
+        # TypeError aqui tumbaba `step()` entero y el endpoint devolvia 500.
+        pose = []
+        if run_extras:
+            try:
+                pose = self._analyse_pose(frame)
+            except Exception as exc:       # noqa: BLE001
+                self._pose_errors += 1
+                if self._pose_errors <= 3:
+                    print(f"  [aviso] analisis de pose fallo: "
+                          f"{type(exc).__name__}: {exc}", flush=True)
+        else:
+            pose = []
         pose_signals = []
         for person in pose:
             for s in person["signals"]:
@@ -521,7 +550,12 @@ class RiskEngine:
 
         # --- obstaculos (RQF02 1) ---
         if run_extras:
-            self._last_obstacles = self._obstacles(frame)
+            try:
+                self._last_obstacles = self._obstacles(frame)
+            except Exception as exc:       # noqa: BLE001
+                if self._pose_errors <= 3:
+                    print(f"  [aviso] deteccion de obstaculos fallo: "
+                          f"{type(exc).__name__}: {exc}", flush=True)
         obstacles = self._last_obstacles
 
         # --- persistencia y alertas (RQF06, RQF07) ---
