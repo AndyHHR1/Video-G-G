@@ -21,9 +21,11 @@ from __future__ import annotations
 
 import argparse
 import hmac
+import json
 import io
 import os
 import queue
+import sys
 import tempfile
 import threading
 import time
@@ -90,11 +92,8 @@ CLASS_INFO = {
 
 RISK_ORDER = {"ALTO": 3, "MEDIO": 2, "BAJO": 1, "NEUTRO": 0, "CONTEXTO": 0}
 
-try:
-    from risk_engine import RISK_COLOR
-except Exception:                      # pragma: no cover
-    RISK_COLOR = {"ALTO": (60, 60, 235), "MEDIO": (60, 170, 245),
-                  "BAJO": (90, 200, 90), "CONTEXTO": (200, 120, 200)}
+sys.path.insert(0, str(ROOT / "app"))
+from risk_engine import RISK_COLOR, RiskEngine
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 512 * 1024 * 1024   # 512 MB
@@ -170,8 +169,10 @@ class Inferencer:
                     self._engine.reset()
                     out["value"] = None
                 else:
-                    out["value"] = self._job(image, conf, imgsz,
-                                             draw=not out.get("no_draw", False))
+                    out["value"] = self._job(
+                        image, conf, imgsz,
+                        draw=not out.get("no_draw", False),
+                        force=out.get("force", False))
                     # El ultimo resultado se guarda SIEMPRE, no solo en modo
                     # asincrono. Antes se guardaba bajo `if self._async`, pero
                     # la peticion restaura `_async = False` en su `finally`
@@ -196,7 +197,7 @@ class Inferencer:
             else:
                 out["done"].set()
 
-    def _job(self, image, conf, imgsz, draw=True):
+    def _job(self, image, conf, imgsz, draw=True, force=False):
         """Motor completo + dibujo, ambos dentro del hilo trabajador.
 
         El dibujo tambien se hace aqui a proposito: medir en esta maquina
@@ -207,7 +208,7 @@ class Inferencer:
             self._conf = conf
             self._engine.conf = conf
         t0 = time.perf_counter()
-        result = self._engine.step(image)
+        result = self._engine.step(image, force=force)
         t_predict = (time.perf_counter() - t0) * 1000
 
         # En el modo `overlay=0` (camara en vivo) el navegador dibuja las cajas
@@ -246,14 +247,15 @@ class Inferencer:
     def set_async(self, on: bool) -> None:
         self._async = on
 
-    def detect(self, image: np.ndarray, conf: float, imgsz: int, draw: bool = True):
+    def detect(self, image: np.ndarray, conf: float, imgsz: int, draw: bool = True,
+               force: bool = False):
         """Encola el trabajo y espera el resultado.
 
         En modo asincrono devuelve de inmediato el ultimo resultado disponible
         (o `None` si aun no hay ninguno). El frame se encola igualmente, asi
         que el motor sigue trabajando al ritmo que puede.
         """
-        out = {"done": threading.Event(), "no_draw": not draw}
+        out = {"done": threading.Event(), "no_draw": not draw, "force": force}
         # "Solo el ultimo frame importa": si el motor no llega al ritmo de la
         # webcam, la cola crece y el resultado llega cada vez mas rancio. Se
         # descartan los frames en espera cuando se acumulan.
@@ -411,7 +413,12 @@ def api_detect():
     # fotograma para que no hereden obstaculos ni escalera de la imagen previa.
     _inferencer.engine_reset()
     t0 = time.perf_counter()
-    annotated, result, dets, timing = _inferencer.detect(image, conf, imgsz)
+    # Imagen fija: se ejecutan pose, personas, escalera y obstaculos SIEMPRE.
+    # Sin esto el movil se detectaba 1 de cada 15 analisis, porque los
+    # obstaculos solo se evaluan en los fotogramas que tocan su cadencia, y al
+    # recargar la misma imagen no cambia nada: la escena es la misma.
+    annotated, result, dets, timing = _inferencer.detect(
+        image, conf, imgsz, draw=True, force=True)
     t_all = (time.perf_counter() - t0) * 1000
     t_enc = time.perf_counter()
     payload = encode_jpeg(annotated).hex()
@@ -554,6 +561,47 @@ def annotate_status(frame: np.ndarray, dets: list[dict], fps: float = 0.0,
                 1, cv2.LINE_AA)
     cv2.putText(frame, f'Riesgo: {summary["level"]}',
                 (10, 39), cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2, cv2.LINE_AA)
+
+
+@app.get("/api/alerts")
+def api_alerts():
+    """Historial de alertas para el panel de supervision (RQF08).
+
+    Lee `runs/alerts/<AAAA-MM-DD>/` y `alertas.jsonl`, de modo que el panel
+    sobrevive a un reinicio del servidor.
+    """
+    d = RiskEngine.ALERT_DIR
+    if not d.is_dir():
+        return jsonify({"alertas": [], "total": 0})
+    lineas = []
+    jl = d / "alertas.jsonl"
+    if jl.is_file():
+        for ln in jl.read_text(encoding="utf-8", errors="replace").splitlines():
+            ln = ln.strip()
+            if not ln:
+                continue
+            try:
+                a = json.loads(ln)
+            except Exception:
+                continue
+            ev = a.get("evidence") or ""
+            rel = Path(ev).name
+            dia = Path(ev).parent.name
+            existe = rel and (Path(ev).exists())
+            a["imagen"] = f"/api/alerta-imagen/{dia}/{rel}" if existe else None
+            lineas.append(a)
+    lineas.reverse()
+    return jsonify({"alertas": lineas[:100], "total": len(lineas)})
+
+
+@app.get("/api/alerta-imagen/<dia>/<nombre>")
+def api_alerta_imagen(dia: str, nombre: str):
+    """Sirve la imagen de una alerta, siempre dentro de `runs/alerts/`."""
+    base = RiskEngine.ALERT_DIR.resolve()
+    destino = (base / dia / nombre).resolve()
+    if not str(destino).startswith(str(base) + "/") or not destino.is_file():
+        return jsonify({"error": "no encontrada"}), 404
+    return send_file(str(destino), mimetype="image/jpeg")
 
 
 @app.get("/api/cameras")

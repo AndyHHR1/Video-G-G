@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import math
+import shutil
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field, asdict
@@ -37,6 +38,8 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+
+ROOT = Path(__file__).resolve().parent.parent
 
 # --------------------------------------------------------------------------- #
 # Parametros exigidos por Caso.md
@@ -49,9 +52,25 @@ CONF_CONFIRM = 0.85        # RQF04: umbral de confirmacion
 # Con 0.75 el detector de obstaculos no encontraba practicamente nada, que es
 # exactamente el fallo reportado.
 CONF_OBSTACLE = 0.25
-PERSIST_SECONDS = 3.0      # RQF06: persistencia minima
+# Persistencia por severidad (RQF06). Antes eran 3 s fijos, pero una caida no
+# dura 3 s: de pie al suelo lleva aproximadamente 1 s, asi que con 3 s solo
+# se alertaba cuando la persona ya llevaba un rato en el suelo, que es
+# precisamente lo que RQF06 quiere evitar (avisar ANTES de la caida, no
+# despues).
+#
+#   ALTO  1.2 s -> filtra un tropiezo puntual sin perder la caida real
+#   MEDIO 0.6 s -> el tambaleo es mas breve y hay que avisar antes
+#
+# Nota: el umbral del 85% de RQF04 NO se activa para las alertas. En este
+# modelo casi ninguna deteccion de persona alcanza esa confianza, y conectarlo
+# dejaria el sistema sin alertas nunca.
+PERSIST_SECONDS = {"ALTO": 1.2, "MEDIO": 0.6}
+PERSIST_DEFAULT = 1.0
 OCCLUSION_SECONDS = 1.0    # RQF05: oclusion tolerada
-ALERT_COOLDOWN = 15.0      # evita rafaga de alertas repetidas
+# Enfriamiento por identidad y tipo de riesgo: sin esto, una condicion
+# sostenida (por ejemplo no sujetar el pasamanos durante todo el descenso)
+# generaria una alerta cada 15 s sin parar.
+ALERT_COOLDOWN = 15.0
 
 # Categorias de riesgo de RQF02, con la severidad que se les asigna.
 RISK_CATALOG = {
@@ -285,8 +304,7 @@ class RiskEngine:
         # --- estado -------------------------------------------------------
         self.tracks: dict[int, TrackState] = {}
         self.alerts: deque = deque(maxlen=200)
-        self.log_path = Path("runs/alerts.jsonl")
-        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        self.log_path = self.ALERT_DIR / "alertas.jsonl"
         self._alert_seq = 0
 
         # El seguimiento es IoU handmade (ver `_track`), no ByteTrack: se
@@ -514,8 +532,11 @@ class RiskEngine:
             st.risk_seen.add((tid, risk))
         dur = now - st.risk_since[risk]
         last = st.alerts.get(risk, 0.0)
-        # RQF06: solo se alerta tras PERSIST_SECONDS de persistencia
-        if dur >= PERSIST_SECONDS and now - last > ALERT_COOLDOWN:
+        meta0 = RISK_CATALOG.get(risk, {})
+        severidad = meta0.get("riesgo", "MEDIO")
+        # RQF06: la persistencia exigida depende de la severidad
+        requerido = PERSIST_SECONDS.get(severidad, PERSIST_DEFAULT)
+        if dur >= requerido and now - last > ALERT_COOLDOWN:
             st.alerts[risk] = now
             meta = RISK_CATALOG.get(risk, {})
             self._alert_seq += 1
@@ -536,20 +557,55 @@ class RiskEngine:
             self.alerts.append(alert)
             self._write_audit(alert)          # RQNF16
 
-    def _write_audit(self, alert: Alert) -> None:
-        """Registro auditable append-only (RQNF16, RQNF23)."""
-        with self.log_path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(alert.to_dict(), ensure_ascii=False) + "\n")
+
+
+    ALERT_DIR = ROOT / "runs" / "alerts"
+    ALERT_KEEP_DAYS = 7
+    ALERT_MAX_IMAGES = 200
 
     def _save_evidence(self, now: float) -> str:
-        """Guarda el fotograma como evidencia fotografica (RQF07, RQNF18)."""
-        d = Path("runs/evidence")
-        d.mkdir(parents=True, exist_ok=True)
-        path = d / f"ev_{int(now * 1000)}.jpg"
+        """Guarda el fotograma ANOTADO como evidencia (RQF07, RQNF18).
+
+        Carpeta `runs/alerts/<AAAA-MM-DD>/` y, en la raiz, un `alertas.jsonl`
+        con una linea por alerta. Los rostros se pixelizan antes de escribir
+        (RQNF14) y las imagenes se limpian solas: si no, la carpeta crece sin
+        limite.
+        """
+        import datetime
         frame = getattr(self, "_last_frame", None)
+        dia = datetime.date.fromtimestamp(now).isoformat()
+        d = self.ALERT_DIR / dia
+        d.mkdir(parents=True, exist_ok=True)
+        path = d / f"alerta_{int(now * 1000)}.jpg"
         if frame is not None:
             cv2.imwrite(str(path), self._anonymise(frame.copy()))
+        self._prune_alerts()
         return str(path)
+
+    def _prune_alerts(self) -> None:
+        """Limpieza: conserva ALERT_KEEP_DAYS dias y ALERT_MAX_IMAGES imagenes."""
+        import datetime
+        limite = datetime.date.today() - datetime.timedelta(
+            days=self.ALERT_KEEP_DAYS)
+        if not self.ALERT_DIR.is_dir():
+            return
+        for sub in self.ALERT_DIR.iterdir():
+            if not sub.is_dir():
+                continue
+            try:
+                if datetime.date.fromisoformat(sub.name) < limite:
+                    shutil.rmtree(sub, ignore_errors=True)
+            except ValueError:
+                continue
+        imgs = sorted(self.ALERT_DIR.glob("*/*.jpg"), key=lambda p: p.stat().st_mtime)
+        for viejo in imgs[:max(0, len(imgs) - self.ALERT_MAX_IMAGES)]:
+            viejo.unlink(missing_ok=True)
+
+    def _write_audit(self, alert: Alert) -> None:
+        """Registro auditable append-only en `runs/alerts/alertas.jsonl`."""
+        self.ALERT_DIR.mkdir(parents=True, exist_ok=True)
+        with (self.ALERT_DIR / "alertas.jsonl").open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(alert.to_dict(), ensure_ascii=False) + "\n")
 
     # ------------------------------------------------------------------ #
     # Privacidad (RQNF14, Ley 29733)
@@ -773,19 +829,28 @@ class RiskEngine:
                     best, bestc = name, c
         return best, bestc
 
-    def step(self, frame: np.ndarray) -> dict:
-        """Procesa un fotograma y devuelve el estado completo del sistema."""
+    def step(self, frame: np.ndarray, force: bool = False) -> dict:
+        """Procesa un fotograma y devuelve el estado completo del sistema.
+
+        `force=True` ignora todas las cadencias y ejecuta pose, personas,
+        escalera y obstaculos en este fotograma. Se usa en imagenes fijas: las
+        cadencias existen para no saturar la GPU en un stream de video, pero en
+        una foto subida no hay fotograma siguiente al que ahorrarse trabajo, y
+        sin esto cargar una imagen cinco veces seguidas detectaba el telefono
+        solo en una: los obstaculos se evaluaban 1 de cada 15 y el movil se
+        perdia entre analisis.
+        """
         t0 = time.perf_counter()
         self._last_frame = frame
 
         self._frame_no = getattr(self, "_frame_no", 0) + 1
-        run_extras = (self._frame_no % max(1, self.pose_every)) == 0
+        run_extras = force or (self._frame_no % max(1, self.pose_every)) == 0
         # Los obstaculos van a una cadencia MAS LENTA que la pose: una mochila
         # en un escalon no aparece ni desaparece en tres fotogramas. Medido:
         # YOLO riesgo 19.4 ms, pose 20.0 ms y obstaculos 20.3 ms.
-        run_obstacles = (self._frame_no % max(1, self.obstacle_every)) == 0
-        run_people = (self._frame_no % max(1, self.people_every)) == 0
-        run_stairs = (self._frame_no % max(1, self.stairs_every)) == 0
+        run_obstacles = force or (self._frame_no % max(1, self.obstacle_every)) == 0
+        run_people = force or (self._frame_no % max(1, self.people_every)) == 0
+        run_stairs = force or (self._frame_no % max(1, self.stairs_every)) == 0
 
         # --- localizacion de personas con COCO (RQF02) ---
         #

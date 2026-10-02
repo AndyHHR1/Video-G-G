@@ -48,6 +48,18 @@
   .stage canvas.live { max-width:100%; height:auto; }
   .placeholder { color:#39404f; font-size:13px; padding:60px 20px; text-align:center; }
   .risk { border-radius:8px; padding:14px; margin-bottom:12px; border:1px solid; }
+  /* Panel lateral de alertas (RQF08) */
+  .alert-box { border:1px solid var(--line); border-radius:10px; background:var(--panel);
+               margin-bottom:14px; max-height:340px; overflow:auto; }
+  .alert-item { display:flex; gap:10px; padding:10px; border-bottom:1px solid #1d212a; }
+  .alert-item:last-child { border-bottom:0; }
+  .alert-item img { width:64px; height:44px; object-fit:cover; border-radius:5px; flex-shrink:0; }
+  .alert-alto { border-left:3px solid var(--alto); }
+  .alert-medio { border-left:3px solid var(--medio); }
+  .alert-meta { font-size:11.5px; color:var(--muted); line-height:1.45; }
+  .alert-tipo { font-size:13px; font-weight:560; }
+  .badge { display:inline-block; font-size:10px; padding:1px 6px; border-radius:9px;
+           background:#232838; color:var(--muted); margin-left:5px; }
   .risk .lvl { font-size:19px; font-weight:700; letter-spacing:.04em; }
   .risk .msg { font-size:12.5px; color:var(--muted); margin-top:5px; line-height:1.5; }
   .r-ALTO { background:rgba(224,60,60,.10); border-color:rgba(224,60,60,.42); }
@@ -101,6 +113,10 @@
         </div>
       </div>
       <div>
+        <div class="card" style="margin-bottom:16px">
+          <h2>Alertas · RQF08</h2>
+          <div class="alert-box" id="alertbox1"><div class="req">Sin alertas.</div></div>
+        </div>
         <div id="rimg"></div>
         <div class="card" style="margin-top:16px">
           <h2>Detecciones</h2>
@@ -125,6 +141,10 @@
         </div>
       </div>
       <div>
+        <div class="card" style="margin-bottom:16px">
+          <h2>Alertas · RQF08</h2>
+          <div class="alert-box" id="alertbox2"><div class="req">Sin alertas.</div></div>
+        </div>
         <div class="card">
           <h2>Procesado local</h2>
           <div style="font-size:12.5px;color:var(--muted);line-height:1.6">
@@ -165,6 +185,10 @@
       </div>
       <div>
         <div class="card" id="camrisk"></div>
+        <div class="card" style="margin-bottom:16px">
+          <h2>Alertas · RQF08</h2>
+          <div class="alert-box" id="alertbox3"><div class="req">Sin alertas.</div></div>
+        </div>
         <div class="card" style="margin-top:16px">
           <h2>Cómo usar esta prueba</h2>
           <div style="font-size:12.5px;color:var(--muted);line-height:1.7">
@@ -329,6 +353,7 @@ $('#bimg').onclick = async () => {
       </div>`;
     $('#rimg').innerHTML += riskPanels(d);
     $('#timg').innerHTML = detTable(d.detections);
+    cargarAlertas();
   } finally {
     $('#bimg').disabled = false; $('#bimg').textContent = 'Analizar';
   }
@@ -604,6 +629,36 @@ $('#bcam').onclick = async () => {
   loop();
   cam.video = v;
 };
+
+// Panel de alertas (RQF08). Lee el historial del servidor y lo pinta en los
+// tres pestanas.
+const SEV_TXT = {ALTO:'Crítico', MEDIO:'Precaución', BAJO:'Bajo', NEUTRO:'-', CONTEXTO:'-'};
+async function cargarAlertas() {
+  let d;
+  try { d = await (await fetch('/api/alerts')).json(); }
+  catch (e) { return; }
+  const lista = d.alertas || [];
+  const html = lista.length ? lista.map(a => `
+    <div class="alert-item ${a.severity==='ALTO'?'alert-alto':'alert-medio'}">
+      ${a.imagen ? `<img src="${a.imagen}" alt="">`
+                 : '<div style="width:64px;height:44px;background:#0d0f14;border-radius:5px"></div>'}
+      <div style="min-width:0">
+        <div class="alert-tipo">${(a.risk_type||'').replace(/_/g,' ')}
+          <span class="badge">${SEV_TXT[a.severity]||a.severity}</span></div>
+        <div class="alert-meta">${(a.timestamp||'').replace('T',' ')} · ${a.duration_s}s ·
+          id ${a.track_id} · conf ${((a.confidence||0)*100).toFixed(0)}%</div>
+        <div class="alert-meta">${a.risk_ref||''}</div>
+      </div>
+    </div>`).join('') : '<div class="req">Sin alertas registradas.</div>';
+  for (const id of ['alertbox1','alertbox2','alertbox3']) {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = html;
+  }
+}
+document.addEventListener('DOMContentLoaded', () => {
+  cargarAlertas();
+  setInterval(cargarAlertas, 3000);
+});
 
 function camFail(msg) {
   $('#scam').innerHTML = `<div class="placeholder" style="max-width:520px">${msg}</div>`;
