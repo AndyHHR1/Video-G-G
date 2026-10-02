@@ -147,12 +147,11 @@
             <b id="cvcam">0.25</b></label>
           <label>Enviar cada
             <select id="rate" style="background:#171a21;color:#e6e9ef;border:1px solid #262b36;border-radius:5px;padding:4px">
-              <option value="200">5 fps</option>
-              <option value="100" selected>10 fps</option>
+              <option value="100">10 fps</option>
               <option value="66">15 fps</option>
               <option value="50">20 fps</option>
               <option value="40">25 fps</option>
-              <option value="33">30 fps</option>
+              <option value="33" selected>30 fps (recomendado)</option>
             </select>
           </label>
           <label title="Desacoplado: el navegador no espera y llega a ~110 fps, pero las cajas se dibujan sobre el frame actual con datos de fotogramas anteriores, asi que van retrasadas.">
@@ -531,6 +530,15 @@ $('#bcam').onclick = async () => {
 
   const loop = () => {
     if (!cam.on) return;
+    // La camara se captura al ritmo elegido y se encola TOA. El servidor
+    // descarta los fotogramas que no puede procesar (deja 3 en cola), asi que
+    // lo que acaba viendo son los MAS RECIENTES y no una muestra espaciada.
+    //
+    // Antes el envio estaba limitado a 10 fps mientras el motor procesa unos
+    // 20: la maquina veia uno de cada tres fotogramas de los que muestras, y
+    // un estado transitorio de menos de 200 ms se le escapaba entero. Con
+    // captura a 30 y descarte por saturacion, el motor ve practicamente
+    // todos los fotogramas que le da tiempo a mirar.
     const gap = +$('#rate').value;
     setTimeout(async () => {
       if (!cam.on) return;
