@@ -40,19 +40,32 @@ from pathlib import Path
 # --------------------------------------------------------------------------- #
 SEED = 42  # semilla fija para que el split sea reproducible
 
-# Taxonomia unificada, alineada al documento de requisitos (RQF02 / RQF03).
+# Taxonomia unificada de 6 clases, alineada al documento de requisitos.
+#
+# DECISION REVERTIDA (parte 2): se habia fusionado la clase `persona`
+# generica dentro de `persona_erguida` para eliminar el colapso de
+# predicciones. Se midio y FUE UN ERROR: mAP50 de test paso de 0.706 a 0.587,
+# y todas las clases bajaron. La causa es que forzar una sola clase sobre
+# fotos de stock de personas de pie (grandes, iluminadas, posadas) y sobre
+# peatones de CCTV (pequenos, al 1% del encuadre) multiplica la varianza
+# intra-clase. Se conservan las 6 clases y se controla el colapso con el techo
+# de cajas del recorte (max_boxes_per_class), que es donde se demuestra que
+# funciona.
 CLASSES = {
-    0: "persona_caido",        # post-caida: persona tendida en el suelo   [fall:0]
-    1: "persona_sentado",      # postura no ergonomica / agachada          [fall:2]
-    2: "persona_erguida",      # transito seguro, postura erguida          [fall:1, Le2i:Stand]
-    3: "escalera",             # tramo de escalera                         [stairs:0]
-    4: "persona",              # deteccion base para MediaPipe             [tracking]
-    5: "persona_desequilibrio",  # PRE-CAIDA: pierde equilibrio             [Le2i:Likefall]
+    0: "persona_caido",          # post-caida: persona tendida en el suelo
+    1: "persona_sentado",        # postura no ergonomica / agachada
+    2: "persona_erguida",        # postura erguida, fotos de stock y Le2i Stand
+    3: "escalera",               # tramo de escalera
+    4: "persona",                # peaton generico de CCTV (lejos / de espaldas)
+    5: "persona_desequilibrio",  # PRE-CAIDA: pierde equilibrio
 }
 
 # Mapeo desde el id original de cada dataset al id unificado.
 MAP_FALL = {0: 0, 2: 1, 1: 2}     # fall: caido->0, sentado->1, de_pie->2
 MAP_STAIRS = {0: 3}                # stairs: escalera->3
+# `tracking` se queda como clase propia: los peatones de CCTV son pequenos y
+# lejanos, una escala muy distinta a la de las fotos de `fall`, y mezclarlos
+# en `persona_erguida` degrada todas las clases (medido: mAP50 0.706 -> 0.587).
 TRACKING_CLASS = 4
 # Le2i se escribe ya con los ids de la taxonomia unificada (ver
 # scripts/prepare_le2i.py), asi que solo hay que filtrar las clases validas.
@@ -133,6 +146,12 @@ class Sample:
         self.out_name = out_name    # nombre del archivo de salida
         self.split: str | None = None
 
+    def classes(self) -> set:
+        return {c for c, *_ in self.boxes}
+
+    def label_rows(self) -> list:
+        return [f"{c} {cx} {cy} {w} {h}" for c, cx, cy, w, h in self.boxes]
+
     def __repr__(self):
         return f"<{self.out_name} boxes={len(self.boxes)} split={self.split}>"
 
@@ -200,6 +219,56 @@ class Builder:
                 s.split = target
 
     # -- seguridad contra fuga ------------------------------------------- #
+    def dedupe_preferring_rare_classes(self) -> int:
+        """Elimina imagenes duplicadas conservando la clase mas ESCASA.
+
+        El problema aparece en Le2i: sus clips se solapan tanto que un mismo
+        frame aparece en varias carpetas de estado a la vez (el mismo fotograma
+        figura como `Likefall` y como `Stand`). Con una deduplicacion "el
+        primero que llega gana", se quedaba el `Stand` --porque `Stand` se
+        recorre antes-- y `persona_desequilibrio` se quedaba SIN NINGUNA
+        instancia en test, con lo que su mAP era incalculable.
+
+        Aqui, para cada hash repetido, se conserva la muestra cuya clase es
+        globalmente mas escasa, que es la que tiene menos margen a perder. Es
+        la misma idea que prioriza las clases minoritarias en cualquier
+        problema de datos desbalanceados.
+        """
+        rarity = {cid: n for cid, n in self.class_totals().items()}
+        by_md5: dict[str, list[Sample]] = defaultdict(list)
+        for s in self.samples:
+            by_md5[s.src_hash].append(s)
+
+        order = {"train": 0, "val": 1, "test": 2}
+        victims: list[Sample] = []
+        for group in by_md5.values():
+            if len(group) < 2:
+                continue
+            # rarer primero; a igualdad, train antes que val antes que test
+            group.sort(key=lambda s: (
+                min((rarity.get(c, 0) for c in
+                     {int(l.split()[0]) for l in
+                      s.label_rows()} or {-1}), default=0),
+                order.get(s.split, 9),
+                s.out_name,
+            ))
+            keeper = group[0]
+            for s in group[1:]:
+                victims.append(s)
+                self.dropped.append(
+                    ("duplicado_clase_escasa", f"{s.src_img} (== {keeper.src_img})")
+                )
+        if victims:
+            ids = {id(s) for s in victims}
+            self.samples = [s for s in self.samples if id(s) not in ids]
+        return len(victims)
+
+    def class_totals(self) -> Counter:
+        c: Counter = Counter()
+        for s in self.samples:
+            c.update(s.classes())
+        return c
+
     def scrub_cross_split_duplicates(self) -> int:
         """Elimina cualquier imagen presente en mas de un split.
 
@@ -270,16 +339,32 @@ class Builder:
 
     def write_data_yaml(self) -> None:
         names = {i: n for i, n in CLASSES.items()}
-        yaml_txt = (
+        header = (
             "# Dataset unificado - Prevencion de Caidas y Riesgos en Escaleras\n"
             "# Generado por scripts/prepare_dataset.py (NO editar a mano).\n"
-            f"path: {self.out.resolve()}\n"
+        )
+        (self.out / "data.yaml").write_text(
+            header
+            + f"path: {self.out.resolve()}\n"
             "train: images/train\n"
             "val: images/val\n"
             "test: images/test\n"
-            "\nnames:\n" + "".join(f"  {i}: {n}\n" for i, n in names.items())
+            "\nnames:\n" + "".join(f"  {i}: {n}\n" for i, n in names.items()),
+            encoding="utf-8",
         )
-        (self.out / "data.yaml").write_text(yaml_txt, encoding="utf-8")
+        # Variante que ADEMAS usa las variantes de primer plano generadas por
+        # scripts/add_zoom_variants.py. Se escribe siempre para que exista
+        # aunque aun no se hayan generado: si la carpeta falta, Ultralytics
+        # avisa y se puede volver al data.yaml normal.
+        (self.out / "data_zoom.yaml").write_text(
+            header
+            + f"path: {self.out.resolve()}\n"
+            "train:\n  - images/train\n  - images/train_zoom\n"
+            "val: images/val\n"
+            "test: images/test\n"
+            "\nnames:\n" + "".join(f"  {i}: {n}\n" for i, n in names.items()),
+            encoding="utf-8",
+        )
 
     def report(self) -> None:
         print("\n" + "=" * 68)
@@ -619,8 +704,9 @@ def load_le2i(b: Builder, le2i_root: Path) -> None:
         for img in sorted(img_dir.iterdir()):
             if not img.is_file() or img.suffix.lower() not in IMG_EXTS:
                 continue
-            if b.is_duplicate(img):
-                continue
+            # NO se deduplica aqui: en Le2i un mismo frame aparece en varias
+            # carpetas de estado y hay que resolverlo globalmente priorizando
+            # la clase mas escasa (ver Builder.dedupe_preferring_rare_classes).
             lbl = lbl_dir / f"{img.stem}.txt"
             boxes = [
                 (MAP_LE2I[c], cx, cy, w, h)
@@ -663,6 +749,8 @@ def main() -> None:
     load_le2i(b, le2i)
     print(f"  muestras cargadas: {len(b.samples)}")
 
+    n_dup = b.dedupe_preferring_rare_classes()
+    print(f"  duplicados resueltos priorizando la clase mas escasa: {n_dup}")
     b.assign_splits()          # reasigna train/val/test por grupo, sin fuga
     n_removed = b.scrub_cross_split_duplicates()
     print(f"  barrido de fuga: {n_removed} imagenes eliminadas por estar en "
