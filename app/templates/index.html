@@ -257,7 +257,8 @@ function riskPanels(d) {
   h += `<div class="card" style="margin-bottom:12px">
     <h2>Obstáculos en la escalera · RQF02 (1)</h2>`;
   h += obs.length
-    ? '<table>' + obs.map(o=>`<tr><td>${o.objeto}</td><td>${(o.conf*100).toFixed(0)}%</td></tr>`).join('') + '</table>'
+    ? '<table>' + obs.map(o=>`<tr><td>${o.objeto}</td><td>${(o.conf*100).toFixed(0)}%</td>
+        <td class="req">${o.riesgo === 'ALTO' ? 'obstáculo' : 'escena'}</td></tr>`).join('') + '</table>'
     : '<div class="req">Ningún objeto detectado sobre el escalón.</div>';
   h += '</div>';
   // RQF02 (2)(3) postura
