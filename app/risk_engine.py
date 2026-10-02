@@ -95,6 +95,12 @@ OBSTACLE_RISK = {
     "bottle": "botella", "book": "libro", "umbrella": "paraguas",
 }
 
+# Telefono movil. NO es un obstaculo: es la evidencia de RQF02 (3)
+# "distracciones (uso del telefono o lectura mientras se camina)".
+# Se detecta con COCO y se combina despues con la pose: un movil cerca de la
+# cabeza de una persona es uso de telefono; un movil suelto en un escalon no.
+PHONE_CLASSES = {"cell phone": "telefono"}
+
 # Mobiliario: no es un riesgo por si mismo, pero forma parte de la escena y
 # se dibuja como CONTEXTO. Antes se eliminaba del filtro, y eso hacia que
 # las sillas y bancos que el detector si encontraba dejaran de aparecer: el
@@ -107,7 +113,7 @@ OBSTACLE_CONTEXT = {
 # Union de ambas. NOTA: `box`, `traffic cone` y `cart` NO existen en el
 # voculario de 80 clases de Ultralytics; se habian escrito por error y nunca
 # pudieron coincidir con nada.
-OBSTACLE_CLASSES = {**OBSTACLE_RISK, **OBSTACLE_CONTEXT}
+OBSTACLE_CLASSES = {**OBSTACLE_RISK, **OBSTACLE_CONTEXT, **PHONE_CLASSES}
 
 RISK_COLOR = {
     "ALTO": (60, 60, 235), "MEDIO": (60, 170, 245),
@@ -195,6 +201,8 @@ class RiskEngine:
                         if v in OBSTACLE_CLASSES}
         self.obs_risk_ids = {k for k, v in self.obs_ids.items()
                              if v in OBSTACLE_RISK}
+        self.obs_phone_ids = {k for k, v in self.obs_ids.items()
+                              if v in PHONE_CLASSES}
 
         # --- RQF02 (2) y (3): postura ------------------------------------
         self.enable_pose = enable_pose
@@ -383,6 +391,16 @@ class RiskEngine:
             if cid not in self.obs_ids:
                 continue
             x1, y1, x2, y2 = [int(v) for v in b.xyxy[0].tolist()]
+            # el movil se separa: no es obstaculo, es evidencia de RQF02 (3)
+            if cid in self.obs_phone_ids:
+                out.append({
+                    "tipo": "telefono",
+                    "objeto": self.obs_names[cid],
+                    "riesgo": "MEDIO",
+                    "conf": round(float(b.conf[0]), 3),
+                    "bbox": [x1, y1, x2, y2],
+                })
+                continue
             es_riesgo = cid in self.obs_risk_ids
             out.append({
                 "tipo": "obstaculo_escalon" if es_riesgo else "elemento_escena",
@@ -581,6 +599,27 @@ class RiskEngine:
                     print(f"  [aviso] deteccion de obstaculos fallo: "
                           f"{type(exc).__name__}: {exc}", flush=True)
         obstacles = self._last_obstacles
+
+        # --- telefono cerca de la cabeza: RQF02 (3) confirmado por evidencia --
+        # Un movil detectado por COCO no basta: puede estar suelto. Se cruza
+        # con los keypoints de la pose y solo si la caja del movil cae cerca
+        # de la nariz se emite la señal de distraccion.
+        telefonos = [o for o in obstacles if o.get("tipo") == "telefono"]
+        if telefonos and pose:
+            for person in pose:
+                nose_x, nose_y = person["landmarks"][0]
+                h, w = frame.shape[:2]
+                for ph in telefonos:
+                    cx = (ph["bbox"][0] + ph["bbox"][2]) / 2 / w
+                    cy = (ph["bbox"][1] + ph["bbox"][3]) / 2 / h
+                    if math.hypot(cx - nose_x, cy - nose_y) < 0.14:
+                        pose_signals.append({
+                            "tipo": "distraccion", "conf": min(0.9, ph["conf"] + 0.3),
+                            "n": 3, "riesgo": "MEDIO", "ref": "RQF02 (3)",
+                            "desc": "Uso de teléfono móvil detectado junto a la cabeza.",
+                            "detalle": f"teléfono a {math.hypot(cx-nose_x, cy-nose_y):.2f} de la nariz",
+                        })
+
 
         # --- persistencia y alertas (RQF06, RQF07) ---
         for d in dets:
