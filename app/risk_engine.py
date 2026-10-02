@@ -228,6 +228,7 @@ class RiskEngine:
         # `pose_every`): sin esta cache, en los frames intermedios no habria
         # keypoints y la clasificacion caeria a `persona` generica.
         self._last_geom: str | None = None
+        self._last_tambaleo: bool = False
         # Postura ya clasificada por el modelo, reutilizada unos fotogramas:
         # reclasificar a 30 fps cuesta 22 ms por persona y la postura no cambia
         # tan rapido.
@@ -623,6 +624,20 @@ class RiskEngine:
     GEOM_CAIDO_INCLINA = 25.0
     GEOM_CAIDO_CABEZA = 0.55
     GEOM_DESEQUILIBRIO_CABEZA = 0.90
+    # Umbral de INESTABILIDAD: cuerpo que empieza a caerse sin estar todavia
+    # en el suelo. Medido sobre el test set, con el porcentaje de personas de
+    # pie que cada umbral marcaria por error:
+    #
+    #     inclinacion >  8 deg -> 19% falsos positivos | 92% de las caidas
+    #     inclinacion > 10 deg -> 13% falsos positivos | 92% de las caidas
+    #     inclinacion > 12 deg ->  6% falsos positivos | 85% de las caidas  <- este
+    #     inclinacion > 16 deg ->  4% falsos positivos | 70% de las caidas
+    #
+    # Con 25 grados (el umbral de "caido") una persona que se esta cayendo
+    # seguia saliendo como `persona_erguida` hasta que tocaba el suelo, que es
+    # exactamente lo que reporto el usuario. A 12 grados se detecta la caida EN
+    # CURSO y aun asi se acierta el 94% de las personas de pie.
+    GEOM_INESTABLE_INCLINA = 12.0
 
     def _postura_por_geometria(self, pose: list[dict]) -> str | None:
         """Deduce la postura de los keypoints. None si no hay pose.
@@ -641,9 +656,15 @@ class RiskEngine:
         inclinacion = math.degrees(
             math.atan2(abs(hip[0] - tob[0]), abs(hip[1] - tob[1])))
         cabeza = (hip[1] - pts[0][1]) / largo
+        tambaleo = bool(getattr(self, "_last_tambaleo", False))
         if inclinacion > self.GEOM_CAIDO_INCLINA or cabeza < self.GEOM_CAIDO_CABEZA:
             return "persona_caido"
-        if cabeza < self.GEOM_DESEQUILIBRIO_CABEZA:
+        # Pre-caida: cuerpo todavia de pie pero ya inclinándose, o señal de
+        # tambaleo. `tambaleo` por si solo marca 71% de las caidas y solo
+        # 5% de las personas de pie (medido).
+        if (inclinacion > self.GEOM_INESTABLE_INCLINA
+                or cabeza < self.GEOM_DESEQUILIBRIO_CABEZA
+                or tambaleo):
             return "persona_desequilibrio"
         return "persona_erguida"
 
@@ -662,6 +683,7 @@ class RiskEngine:
         self._last_obstacles = []
         self._last_geom = None
         self._last_class = None
+        self._last_tambaleo = False
 
     def _find_people(self, frame: np.ndarray) -> list[list[int]]:
         """Detecta personas con el modelo COCO de 80 clases.

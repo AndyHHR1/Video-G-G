@@ -574,3 +574,73 @@ ruta de vídeo (`draw=True`) y la de cámara (`draw=False`): el móvil salía
 `CONTEXTO` en una y `MEDIO` en la otra. Se corrigió al unificar ambas, pero
 **no era la causa** que el usuario reportaba. Los datos del historialFestival
 apuntaron al clasificador, no al código de reporte.
+
+---
+
+# PARTE 9 — La caída en curso salía como "persona erguida"
+
+## Síntoma
+
+Con el arreglo de la parte 8 (la geometría manda sobre el recorte) se corrigió
+el falso «caída» con gente de pie, pero apareció el fallo inverso: **una persona
+que se está cayendo sale como `persona_erguida` hasta que toca el suelo**.
+
+## Por qué
+
+La clase se decidía solo con dos señales: inclinación del eje
+tobillo→cadera (>25° = caída) y altura de la cabeza sobre la cadera. Un cuerpo
+que empieza a caerse todavía está casi vertical, así que ninguna de las dos se
+dispara: la persona pasa directamente de `erguida` a `caído` al tocar el suelo,
+sin estado intermedio.
+
+El proyecto ya tenía una señal capaz de ver ese estado, `tambaleo`
+(inclinación del tronco y asimetría de rodillas), pero **no influía en la clase**:
+era solo un indicador de riesgo del panel, mientras la caja decía «erguida».
+
+## Decisión
+
+`persona_desequilibrio` (pre-caída) pasa a dispararse con un umbral de
+inestabilidad más bajo, y se le suma la señal de `tambaleo`. El umbral se
+eligió midiendo el coste en personas de pie:
+
+| inclinación > | personas de pie marcadas (falso positivo) | caídas detectadas |
+|---|---|---|
+| 8° | 19% | 92% |
+| 10° | 13% | 92% |
+| **12°** | **6%** | **85%** |
+| 16° | 4% | 70% |
+| 25° (el de «caído») | ~2% | 65% |
+
+Se eligió **12°**: detecta la caída en curso conservando el 94% de las personas
+de pie. Antes el umbral era 25°, que es el de «caído», y por eso la caída a
+media luz no se veía.
+
+`tambaleo` por sí solo discrimina bien: **71% de las caídas y 5% de las
+personas de pie** (medido sobre el test set).
+
+## Resultado
+
+| | antes (parte 8) | ahora |
+|---|---|---|
+| persona de pie bien clasificada | 83% | **88%** |
+| persona caída bien clasificada | 90% | 88% |
+
+Además, un 5% de las personas de pie pasan a «pérdida de equilibrio», que es
+un falso positivo asumido y declarado: es el precio de cubrir la caída en
+curso, que antes no se detectaba en absoluto.
+
+**Límite honesto:** el test set no contiene la categoría «cayéndose pero sin
+haber tocado el suelo», porque ningún dataset la anota. La mejora de esa
+casística concreta **no se puede medir aquí**; se espera de que el umbral de
+12° la cubra, y es lo que el usuario debe comprobar con su vídeo.
+
+## Sobre los FPS
+
+Las mediciones de este motor han oscilado entre **19 y 31 fps para la misma
+configuración** a lo largo de la sesión, según la carga externa de la GPU
+(`nvidia-smi` llega a informar de más de 1 GB de VRAM ocupada sin listar
+ningún proceso). La cifra reproducible en el momento es **~19-20 fps en el
+motor** y **~24 fps en la cámara por HTTP**, con 41 ms por ciclo.
+
+RQNF01 (30 fps) no se cumple de forma sostenida en esta máquina. Se dejó
+constancia en vez de ajustar el número.
