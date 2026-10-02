@@ -364,6 +364,15 @@ function drawBoxes(src, dst, d, k) {
   const c = dst.getContext('2d');
   c.drawImage(src, 0, 0, dst.width, dst.height);
   for (const b of d.detections) {
+    // las señales de postura no tienen caja: no se dibuja rectángulo
+    if (!b.bbox) {
+      const col = RISK_COLOR[b.risk] || '#dcdcdc';
+      c.font = 'bold 13px system-ui,sans-serif';
+      c.fillStyle = col;
+      c.fillText(`${(b.tipo||'').replace(/_/g,' ').toUpperCase()} ${b.ref||''}`.trim(),
+                  10, 54 + 16 * (d._sp = (d._sp||0) + 1) - 16);
+      continue;
+    }
     const col = RISK_COLOR[b.risk] || '#dcdcdc';
     const x1 = b.bbox[0]*dst.width, y1 = b.bbox[1]*dst.height;
     const x2 = b.bbox[2]*dst.width, y2 = b.bbox[3]*dst.height;
