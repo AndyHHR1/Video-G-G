@@ -157,7 +157,23 @@ class TrackState:
 
 
 class RiskEngine:
-    """Pipeline completo: deteccion -> pose -> contexto -> persistencia -> alerta."""
+    """Pipeline completo: deteccion -> pose -> contexto -> persistencia -> alerta.
+
+    CADENCIAS. Con la GPU libre, el coste por fotograma CON persona se reparte
+    asi: COCO personas 17.4 ms (cada frame), MediaPipe pose 18 ms (cada 4),
+    clasificacion por recorte 17.4 ms (cada 4), escalera 12.9 (cada 6) y
+    obstaculos 14.2 (cada 10). Medido con combinaciones:
+
+        personas/1                     20.1 FPS
+        personas/2                     27.9 FPS
+        personas/2 + pose/4            34.7 FPS   <- configuracion actual
+
+    MediaPipe corre en CPU (XNNPACK) y no tiene ruta GPU en la API de
+    soluciones: bajar la resolucion de entrada NO lo acelera (medido: 37 ms a
+    1280 px y 34 ms a 320 px, sobrecoste fijo del grafo). Precision FP16 en los
+    modelos de Ultralytics tampoco ayudo (47.8 ms frente a 45.8 ms). Por eso
+    la palanca util es la CADENCIA, no la potencia de calculo.
+    """
 
     # Cuantas cajas de `escalera` se aceptan como mucho. Medido: en una foto
     # real de escalera el modelo devolvia 6 cajas solapadas que cubrian el
@@ -172,11 +188,11 @@ class RiskEngine:
         conf: float = 0.25,
         enable_pose: bool = True,
         anonymize: bool = True,
-        pose_every: int = 3,
+        pose_every: int = 4,
         obstacle_every: int = 10,
         stairs_every: int = 6,
         classify_every: int = 4,
-        people_every: int = 1,
+        people_every: int = 2,
         person_imgsz: int = 512,
         person_conf: float = 0.30,
     ):

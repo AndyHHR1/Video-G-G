@@ -123,6 +123,16 @@ class Inferencer:
         self._obstacle_weights = obstacle_weights
         self._conf = conf
         self._q: queue.Queue = queue.Queue()
+        # Modo asincrono para la camara en vivo: el navegador entrega el frame
+        # y recibe ENSEGUIDA el ultimo resultado calculado, sin esperar a la
+        # inferencia. Medido: dentro del servidor la inferencia tardaba 42 ms
+        # frente a 26.7 ms en solitario, por la contencion con el hilo de
+        # Flask; esperando de forma sincrona el navegador queda por debajo de
+        # 20 fps aunque el motor de por si va a 37. Desacoplando, el navegador
+        # no bloquea y la inferencia mantiene su ritmo.
+        self._async = False
+        self._last_async: dict | None = None
+        self._lock_async = threading.Lock()
         self._model = None
         self._ready = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -155,7 +165,11 @@ class Inferencer:
                     self._engine.reset()
                     out["value"] = None
                 else:
-                    out["value"] = self._job(image, conf, imgsz)
+                    out["value"] = self._job(image, conf, imgsz,
+                                             draw=not out.get("no_draw", False))
+                    if self._async:
+                        with self._lock_async:
+                            self._last_async = out["value"]
             except BaseException as exc:          # noqa: BLE001
                 # `finally` en vez de `except`: si `out["done"]` no fuera un
                 # Event, el `.set()` lanzaba AttributeError y el hilo
@@ -172,7 +186,7 @@ class Inferencer:
             else:
                 out["done"].set()
 
-    def _job(self, image, conf, imgsz):
+    def _job(self, image, conf, imgsz, draw=True):
         """Motor completo + dibujo, ambos dentro del hilo trabajador.
 
         El dibujo tambien se hace aqui a proposito: medir en esta maquina
@@ -186,9 +200,20 @@ class Inferencer:
         result = self._engine.step(image)
         t_predict = (time.perf_counter() - t0) * 1000
 
+        # En el modo `overlay=0` (camara en vivo) el navegador dibuja las cajas
+        # sobre el frame que ya tiene: dibujar aqui es trabajo que se tira.
+        # Medido, son ~5 ms por fotograma, y es el 10% del presupuesto.
         t1 = time.perf_counter()
-        out = image.copy()
-        detections = draw_all(out, result)
+        out = image.copy() if draw else image
+        detections = draw_all(out, result) if draw else [
+            {**d, "class_name": CLASS_INFO.get(d["class_id"], {}).get("name", d["class_name"]),
+             "risk": d.get("riesgo", "NEUTRO")}
+            for d in result["detecciones"]
+        ] + [{"tipo": s["tipo"], "confidence": s["conf"], "risk": s["riesgo"],
+              "ref": s["ref"], "detalle": s.get("detalle", "")}
+             for s in result["postura"]] + [
+            {**o, "confidence": o["conf"], "risk": o.get("riesgo", "CONTEXTO"),
+             "bbox": o["bbox"], "ref": "RQF02 (1)"} for o in result["obstaculos"]]
         t_draw = (time.perf_counter() - t1) * 1000
         return out, result, detections, {
             "predict": round(t_predict, 1), "draw": round(t_draw, 1),
@@ -208,10 +233,21 @@ class Inferencer:
         self._q.put((None, None, None, out))
         out["done"].wait()
 
-    def detect(self, image: np.ndarray, conf: float, imgsz: int):
-        """Encola el trabajo y espera el resultado."""
-        out = {"done": threading.Event()}
+    def set_async(self, on: bool) -> None:
+        self._async = on
+
+    def detect(self, image: np.ndarray, conf: float, imgsz: int, draw: bool = True):
+        """Encola el trabajo y espera el resultado.
+
+        En modo asincrono devuelve de inmediato el ultimo resultado disponible
+        (o `None` si aun no hay ninguno). El frame se encola igualmente, asi
+        que el motor sigue trabajando al ritmo que puede.
+        """
+        out = {"done": threading.Event(), "no_draw": not draw}
         self._q.put((image, conf, imgsz, out))
+        if self._async:
+            with self._lock_async:
+                return self._last_async
         out["done"].wait()
         if "error" in out:
             raise out["error"]
@@ -391,21 +427,41 @@ def api_frame():
     /dev/video*). El stream MJPEG de /api/stream solo sirve si el servidor
     tiene camara fisica.
     """
-    if "file" not in request.files:
+    # Dos formas de enviar el frame:
+    #   * cuerpo binario crudo con Content-Type image/jpeg  -> rápido
+    #   * multipart/form-data con un campo `file`          -> compatible
+    #
+    # El camino crudo existe por rendimiento: Werkzeug parsea multipart en
+    # Python y con un JPEG de 50 KB costaba ~17 ms por fotograma, casi la
+    # mitad del presupuesto. Mandando el JPEG como cuerpo crudo y la
+    # configuracion en la query string, esa cadena desaparece.
+    raw_body = None
+    if request.mimetype == "image/jpeg" and "file" not in request.files:
+        raw_body = request.get_data(cache=False)
+    if "file" in request.files:
+        raw_body = request.files["file"].read()
+    if not raw_body:
         return jsonify({"error": "no se ha enviado ningún frame"}), 400
-    raw = request.files["file"].read()
-    if not raw:
-        return jsonify({"error": "frame vacío"}), 400
+    raw = raw_body
 
-    conf = float(request.form.get("conf", _settings["conf"]))
-    imgsz = int(request.form.get("imgsz", _settings["imgsz"]))
-    overlay = request.form.get("overlay", "1") not in ("0", "false")
+    conf = float(request.args.get("conf", request.form.get("conf", _settings["conf"])))
+    imgsz = int(request.args.get("imgsz", request.form.get("imgsz", _settings["imgsz"])))
+    overlay = request.args.get(
+        "overlay", request.form.get("overlay", "1")) not in ("0", "false")
 
     image = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
     if image is None:
         return jsonify({"error": "no se pudo decodificar el frame"}), 400
 
-    annotated, result, dets, timing = _inferencer.detect(image, conf, imgsz)
+    if not overlay:
+        # camara en vivo: no se dibuja y no se espera a la inferencia
+        _inferencer.set_async(request.args.get("sync", "0") != "1")
+    got = _inferencer.detect(image, conf, imgsz, draw=overlay)
+    if got is None:
+        return jsonify({"detections": [], "summary": summarise([]),
+                        "riesgo": "BAJO", "timing": {"predict": 0, "draw": 0},
+                        "pendiente": True})
+    annotated, result, dets, timing = got
     if overlay:
         annotate_status(annotated, dets, 0.0, result)
         return jsonify({

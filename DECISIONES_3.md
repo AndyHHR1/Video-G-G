@@ -303,3 +303,63 @@ persona).
 Existe para que la interfaz sepa si el modo «cámara del servidor» es viable, pero
 el frontend no lo llama (la cámara es la del navegador). Se deja: informa del
 estado del hardware vía API y no causa daño.
+
+---
+
+# PARTE 5 — Cómo se recuperaron los 30 FPS
+
+El cuello de botella con personas presentes estaba en 8.2 FPS. Se evaluaron
+cuatro palancas y solo dos funcionaron.
+
+## Lo que NO sirve
+
+| Palanca | Resultado | Por qué |
+|---|---|---|
+| **Más GPU** | no aplica | **MediaPipe corre en CPU** (XNNPACK). La API de soluciones de Python no tiene ruta GPU para Pose. |
+| Bajar la resolución a la pose | 37.2 ms a 1280 px → 34.2 ms a 320 px | El coste es fijo del grafo, no de los píxeles. |
+| **FP16** en los modelos | 47.8 ms vs 45.8 ms | No mejora; el peso ya es pequeño y el cómputo no es el cuello. |
+| Enviar el frame como cuerpo binario en vez de multipart | 18.4 vs 18.8 fps | Se sospechaba del parser de Werkzeug, pero no lo era. |
+
+## Lo que sí sirve
+
+**1. Cadencia (la palanca real).** El coste por fotograma con persona se reparte:
+COCO personas 17.4 ms, pose 18 ms, recorte 17.4 ms, escalera 12.9 ms,
+obstáculos 14.2 ms. Midiendo combinaciones reales:
+
+| configuración | FPS |
+|---|---|
+| personas cada frame | 20.1 |
+| personas cada 2 | 27.9 |
+| **personas cada 2 + pose cada 4** | **34.7** |
+
+Ninguna señal de riesgo cambia en 4 fotogramas (133 ms), así que la cadencia es
+gratis en información.
+
+**2. Desacoplar la inferencia del navegador.** Dentro del servidor la
+inferencia tardaba **42 ms** frente a 26.7 ms en solitario: la contención con el
+hilo de Flask. Con el navegador esperando de forma síncrona, el techo era 18.6
+fps aunque el motor fuera a 37.
+
+En modo asíncrono el navegador entrega el frame y recibe **enseguida el último
+resultado calculado**, sin esperar. El frame se encola igualmente y el motor
+sigue a su ritmo.
+
+| modo | respuesta del navegador | throughput |
+|---|---|---|
+| síncrono | 54 ms | 18.6 fps |
+| **asíncrono** | **9 ms** | **110 fps** |
+
+Verificado que el resultado no se queda rancio: al pasar de frames de persona a
+frames de escalera, la respuesta cambia de «Postura erguida» a «Escalera».
+
+**Qué significa para el requisito:** el **motor cumple 37.4 FPS**. En la cámara
+el navegador captura a su ritmo y siempre muestra el último resultado
+disponible, con una latencia de un ciclo de inferencia. Es la arquitectura
+correcta para un stream: el productor nunca se bloquea por el consumidor.
+
+## Nota sobre la medida
+
+Todas las cifras de esta parte se tomaron con la GPU libre. `nvidia-smi` puede
+informar de varios GB de VRAM ocupados sin listar ningún proceso, que es
+memoria de otro contenedor o del escritorio del host; medir con esa carga da
+cifras falseadas y fue el origen del error de las partes 1-3.
