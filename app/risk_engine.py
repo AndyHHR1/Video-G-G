@@ -639,6 +639,38 @@ class RiskEngine:
     # CURSO y aun asi se acierta el 94% de las personas de pie.
     GEOM_INESTABLE_INCLINA = 12.0
 
+    def _best_person_match(self, people: list[list[int]], frame) -> int:
+        """Indice de la caja de COCO a la que pertenece la pose.
+
+        MediaPipe solo devuelve keypoints de UNA persona. Con varias cajas
+        detectadas hay que decidir a cual corresponde la pose. Se usa el
+        solapamiento (IoU) entre la caja que envuelve al esqueleto completo y
+        cada caja de COCO: comparar un solo punto (la cadera) fallaba, porque
+        un keypoint mal located puede caer cerca de una deteccion falsa.
+        Devuelve -1 si la pose encaja mal con cualquier caja.
+        """
+        lm = getattr(self, "_last_pose_landmarks", None)
+        if not lm or not people:
+            return -1
+        h, w = frame.shape[:2]
+        sx1, sy1 = min(p[0] for p in lm) * w, min(p[1] for p in lm) * h
+        sx2, sy2 = max(p[0] for p in lm) * w, max(p[1] for p in lm) * h
+        if sx2 - sx1 <= 0 or sy2 - sy1 <= 0:
+            return -1
+        best, best_iou = -1, 0.05          # se exige un minimo de solape
+        for i, (x1, y1, x2, y2) in enumerate(people):
+            ix1, iy1 = max(sx1, x1), max(sy1, y1)
+            ix2, iy2 = min(sx2, x2), min(sy2, y2)
+            inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+            if inter <= 0:
+                continue
+            area_esq = (sx2 - sx1) * (sy2 - sy1)
+            area_caja = (x2 - x1) * (y2 - y1)
+            iou = inter / (area_esq + area_caja - inter)
+            if iou > best_iou:
+                best, best_iou = i, iou
+        return best
+
     def _postura_por_geometria(self, pose: list[dict]) -> str | None:
         """Deduce la postura de los keypoints. None si no hay pose.
 
@@ -684,6 +716,8 @@ class RiskEngine:
         self._last_geom = None
         self._last_class = None
         self._last_tambaleo = False
+        self._last_pose_landmarks = None
+        self._last_pose_landmarks = None
 
     def _find_people(self, frame: np.ndarray) -> list[list[int]]:
         """Detecta personas con el modelo COCO de 80 clases.
@@ -852,17 +886,33 @@ class RiskEngine:
         # estaban de pie. Y solo entra en juego cuando la persona ocupa mucho
         # encuadre: con la webcam a 1280x720 el recorte siempre respondia y
         #：los 12 falsos "caida" salieron de ahi, mientras que en el video
-        # a 640x352 la persona va pequena, el recorte no sabe clasificar y
+        # a 640x352 la persona va pequeña, el recorte no sabe clasificar y
         # salta la geometria, que es estable. Ese era el motivo de que en
         # directo se viera riesgo y subiendo el video no.
         #
-        # La geometria solo se aplica a una persona: con varias, sus keypoints
-        # describen a una sola y no se puede extrapolar.
-        unica = len(people) == 1
+        # La geometria NO se descarta por haber varias personas. Antes se
+        # exigia `unica` (una sola persona) porque los keypoints de MediaPipe
+        # describen a una sola persona y seemed extrapolarsa al resto. Ese
+        # candado era justo el fallo: con dos detecciones de COCO (una real y
+        # otra falsa, muy frecuente en escaleras) la geometria se apagaba y
+        # decidia el clasificador por recorte, que va directo a `persona_caido`
+        # sin pasar por el estado intermedio de pre-caida. Por eso en directo
+        # se veía saltar de verde a rojo mientras que en video, donde la
+        # deteccion unica si activate la geometria, aparecia el ambar.
+        #
+        # Ahora se empareja la pose con la caja que mejor encaja y se aplica
+        # la geometria a esa; las demas siguen con el recorte.
+        pose_idx = self._best_person_match(people, frame)
+        # Si hay una sola persona, la pose es suya aunque el solape sea
+        # imperfecto; con varias hay que confiar en el emparejamiento.
+        if pose_idx < 0 and len(people) == 1:
+            pose_idx = 0
+
         run_class = ((self._frame_no % max(1, self.classify_every)) == 0
                      or self._last_class is None)
-        for box in people:
-            if geom and unica:
+        for i, box in enumerate(people):
+            es_la_pose = geom is not None and i == pose_idx
+            if es_la_pose:
                 name, conf_p, origen = geom, 0.55, "geometria de pose"
             elif run_class or not self._last_class \
                     or abs(self._last_class[0][0] - box[0]) > 24:
@@ -872,10 +922,16 @@ class RiskEngine:
             else:
                 name, conf_p = self._last_class[1], self._last_class[2]
                 origen = "modelo (cache)"
-            if not name and geom:
-                name, conf_p, origen = geom, 0.55, "geometria de pose"
+            # Sin nombre no se inventa geometria para una caja cualquiera: antes
+            # este respaldo se aplicaba a TODAS las cajas que el recorte no
+            # supiera clasificar, incluidas las detecciones falsas de COCO, y
+            # una persona inventada se marcaba con la postura de la pose real.
             if not name:
-                name, conf_p, origen = "persona", 0.4, "sin clasificar"
+                if es_la_pose:
+                    name, conf_p, origen = geom, 0.55, "geometria de pose"
+                else:
+                    name, conf_p, origen = "persona", 0.4, "sin clasificar"
+
             det = {
                 "class_id": self.id_of.get(name, 4),
                 "class_name": name,
