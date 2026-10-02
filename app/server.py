@@ -195,23 +195,7 @@ class Inferencer:
 _inferencer = None
 _settings = {"conf": 0.25, "imgsz": 640, "weights": "", "names": {}}
 
-# Guardar las imagenes que se suben durante las pruebas. Sin esto la app
-# procesa el archivo en memoria y lo descarta, y no hay forma de revisar a
-# posteriori POR QUE una deteccion salio mal. Se activa con --save-uploads.
-SAVE_UPLOADS = False
-UPLOAD_DIR = ROOT / "runs" / "uploads"
 
-
-def _save_upload(raw: bytes, tag: str) -> None:
-    if not SAVE_UPLOADS or not raw:
-        return
-    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    name = f"{time.strftime('%Y%m%d_%H%M%S')}_{tag}.jpg"
-    try:
-        cv2.imwrite(str(UPLOAD_DIR / name), cv2.imdecode(
-            np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR))
-    except Exception:
-        pass
 
 
 # --------------------------------------------------------------------------- #
@@ -725,9 +709,6 @@ def main() -> None:
     ap.add_argument("--port", type=int, default=5000)
     ap.add_argument("--conf", type=float, default=0.25)
     ap.add_argument("--imgsz", type=int, default=640)
-    ap.add_argument("--save-uploads", action="store_true",
-                    help="Guarda en runs/uploads/ las imagenes que se suben, "
-                         "para poder revisar despues por que fallo una deteccion")
     ap.add_argument("--obstacle-weights", default="yolov8s.pt",
                     help="Modelo COCO para RQF02 (1): obstaculos en la escalera")
     ap.add_argument("--debug", action="store_true")
@@ -754,12 +735,9 @@ def main() -> None:
     print(f"  clases  : {len(names)} ({', '.join(names.values())})")
     print(f"  conf    : {args.conf}   imgsz: {args.imgsz}")
     print(f"  URL     : http://{args.host}:{args.port}")
-    if args.save_uploads:
-        print(f"  guardando subidas en {UPLOAD_DIR}")
     print("=" * 60)
 
-    global _inferencer, SAVE_UPLOADS
-    SAVE_UPLOADS = args.save_uploads
+    global _inferencer
     print("  cargando pesos en el hilo trabajador...")
     _inferencer = Inferencer(
         str(weights), conf=args.conf,
