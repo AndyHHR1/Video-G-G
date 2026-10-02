@@ -761,3 +761,57 @@ aquí**, porque ningún dataset anota «cayéndose sin haber tocado el suelo» n
 dispone del vídeo del usuario. Es una corrección fundada en el mecanismo
 medido —la máquinaampling uno de cada tres fotogramas— y verificada en que el
 flujo ya no limita la captura.
+
+---
+
+# PARTE 12 — Vaivén de la cadencia de captura (registrado sin adornar)
+
+## Qué pasó, en orden
+
+1. **Parte 11**: se subió la captura de la webcam de 10 a 30 fps. El razonamiento
+   era medido: la cámara mostraba 30 fps, el motor procesaba ~18 y el cerrojo
+   `cam.busy` hacía que solo llegara uno de cada tres fotogramas.
+2. El usuario lo probó y dijo que **se veía peor**.
+3. Se volvió a 10 fps (commit `3dcb4f9`).
+4. El usuario lo probó y dijo que **también quedó peor**.
+
+Estado actual: **30 fps**, el del punto 1 (`git revert 3dcb4f9`).
+
+## Lo que hay que decir con honestidad
+
+**Ninguna de las dos cadencias se ha demostrado mejor que la otra.** Se probaron
+las dos en uso real y el usuario prefiere 30 fps; no hay medición que lo
+sustente, solo observaciones sueltas en distinto momento, con la carga de GPU
+de esta máquina variando y sin poder cuantificarse.
+
+Lo que sí está medido y no depende de esta elección:
+
+- el servidor sostiene ~18.6 fps sostenidos con 0 errores en 60 peticiones
+- el motor tarda ~40-50 ms por fotograma, así que por encima de ~20 fps la
+  cola se satura y el motor analiza fotogramas casi idénticos: **más fps no es
+  más información cuando ya se va saturado**
+- el cuello real es la inferencia (MediaPipe en CPU, que no tiene ruta GPU en la
+  API de soluciones), no la captura
+
+## Qué se conserva
+
+La cadencia no toca el motor. Siguen aplicados los arreglos de las partes 8, 9
+y 10, que son los que cambian el resultado de la detección:
+
+- la geometría de la pose manda sobre el clasificador por recorte
+- `persona_desequilibrio` dispara con 12° y con `tambaleo`
+- la pose se empareja con su caja por IoU
+
+## Si sigue sin cuadrar
+
+El selector de la interfaz permite cambiar la cadencia en caliente (10, 15, 20,
+30 fps) sin tocar código ni reiniciar el servidor. Es lo único de este apartado
+que conviene seguir probando, porque no se puede decidir a ciegas: depende de
+cómo se comporte tu escena concreta.
+
+## Versiones
+
+| tag | contenido |
+|---|---|
+| `v0.3-estable` | antes de evaluar el dataset de Kaggle |
+| `v0.4-captura-30fps` | estado actual |
