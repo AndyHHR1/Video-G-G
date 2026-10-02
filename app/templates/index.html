@@ -42,8 +42,10 @@
   .stage img, .stage video, .stage canvas {
     max-width:100%; max-height:72vh; display:block; border-radius:4px;
   }
-  /* el lienzo de la cámara crece hasta llenar el hueco disponible */
-  .stage canvas.live { width:100%; height:auto; object-fit:contain; }
+  /* el lienzo se muestra a su tamaño NATURAL. Forzar width:100% lo estiraba
+     desde 640 px reales hasta el ancho del contenedor y por eso se veía
+     borroso; ahora el fotograma llega a 1280 y el 1:1 se ve limpio */
+  .stage canvas.live { max-width:100%; height:auto; }
   .placeholder { color:#39404f; font-size:13px; padding:60px 20px; text-align:center; }
   .risk { border-radius:8px; padding:14px; margin-bottom:12px; border:1px solid; }
   .risk .lvl { font-size:19px; font-weight:700; letter-spacing:.04em; }
@@ -229,6 +231,18 @@ fetch('/api/health').then(r=>r.json()).then(d => {
   $('#dev').textContent = `dispositivo: ${d.device} · pesos: ${d.weights.split('/').slice(-2).join('/')}`;
 });
 
+// Un 500 de Flask devuelve una pagina HTML. Intentar parsearla como JSON da
+// "Unexpected token '<'", que no dice nada del problema real.
+async function readJson(r) {
+  const ct = r.headers.get('content-type') || '';
+  if (!ct.includes('application/json')) {
+    const txt = (await r.text()).slice(0, 300);
+    throw new Error(`El servidor devolvió ${r.status} (${ct || 'sin content-type'}). ` +
+                    `Revisa la consola del servidor. ${txt}`);
+  }
+  return r.json();
+}
+
 function riskBox(s) {
   const cls = s.level === 'ALTO' ? 'r-ALTO' : s.level === 'MEDIO' ? 'r-MEDIO' : 'r-BAJO';
   return `<div class="risk ${cls}"><div class="lvl">Riesgo: ${s.level}</div>
@@ -290,7 +304,7 @@ $('#bimg').onclick = async () => {
   $('#bimg').disabled = true; $('#bimg').textContent = 'Analizando…';
   try {
     const r = await fetch('/api/detect', {method:'POST', body:fd});
-    const d = await r.json();
+    const d = await readJson(r);
     if (d.error) { alert(d.error); return; }
     $('#simg').innerHTML = `<img src="data:image/jpeg;base64,${hexToB64(d.image)}">`;
     $('#rimg').innerHTML = riskBox(d.summary) + `
@@ -326,12 +340,12 @@ $('#bvid').onclick = async () => {
   $('#svid').innerHTML = '<div class="placeholder" style="padding:40px 20px">Procesando frame a frame…</div>';
   try {
     const r = await fetch('/api/video', {method:'POST', body:fd});
-    if (!r.ok) { alert((await r.json()).error || 'Error'); $('#svid').innerHTML=''; return; }
-    // La salida va en WebM/VP8: OpenCV escribe mp4v (MPEG-4 Part 2) y los
-    // navegadores no lo decodifican, por eso antes salia negro.
+    if (!r.ok) { const e = await readJson(r).catch(x => ({error: x.message})); alert(e.error || 'Error'); $('#svid').innerHTML=''; return; }
+    // La salida es H.264: OpenCV solo sabe escribir MPEG-4 Part 2, que los
+    // navegadores no reproducen, asi que el servidor lo recodifica.
     const url = URL.createObjectURL(await r.blob());
     $('#svid').innerHTML = `<video src="${url}" controls autoplay loop muted playsinline></video>
-      <div style="font-size:12.5px;color:#8b93a5">Resultado anotado (WebM)</div>`;
+      <div style="font-size:12.5px;color:#8b93a5">Resultado anotado (H.264)</div>`;
   } catch (e) {
     $('#svid').innerHTML = `<div class="placeholder" style="max-width:520px">Error: ${e.message}</div>`;
   } finally {
@@ -473,8 +487,8 @@ $('#bcam').onclick = async () => {
   // canvas de SALIDA: se dibuja el frame ya escalado y encima las cajas que
   // devuelve el servidor. Evita reenviar el JPEG anotado (~50 KB por frame).
   const disp = document.createElement('canvas');
-  disp.width = 640; disp.height = Math.round(640 * cv.height / cv.width);
-  disp.className = 'live';
+  // tamaño nativo: estirarlo con CSS es lo que lo hacia borroso
+  disp.width = 1280; disp.height = Math.round(1280 * cv.height / cv.width);
   // Se vacia el hueco y se reinserta el lienzo grande MAS la previsualizacion
   // en crudo: antes el `innerHTML=''` se comia la previsualizacion y solo
   // quedaba un lienzo a tamano natural, que se veía pequeno.
@@ -502,8 +516,11 @@ $('#bcam').onclick = async () => {
           // 640 de todos modos, asi que mandar la imagen a resolucion nativa
           // solo cuesta ancho de banda y tiempo de decodificacion en el
           // servidor. A 640 de ancho el frame pesa varias veces menos.
+          // 1280 y no 640: el modelo hace letterbox a 640 de todos modos, asi
+          // que el ancho extra no cuesta inferencia, y el lienzo se dibuja a
+          // tamaño nativo en vez de estirarse y verse borroso
           let w = cv.width, h = cv.height;
-          if (w > 640) { h = Math.round(h * 640 / w); w = 640; }
+          if (w > 1280) { h = Math.round(h * 1280 / w); w = 1280; }
           if (w !== cv.width) {
             small.width = w; small.height = h;
             sctx.drawImage(cv, 0, 0, w, h);
@@ -516,7 +533,7 @@ $('#bcam').onclick = async () => {
           fd.append('imgsz', $('#isz').value);
           fd.append('overlay', '0');
           const r = await fetch('/api/frame', {method:'POST', body:fd});
-          const d = await r.json();
+          const d = await readJson(r);
           if (d.error) throw new Error(d.error);
           drawBoxes(small, disp, d, small.width / cv.width);
           $('#camrisk').innerHTML = riskBox(d.summary) + `

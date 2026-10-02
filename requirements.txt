@@ -34,6 +34,11 @@ mediapipe==0.10.21
 Flask==3.1.3
 Werkzeug==3.1.5
 
+# Codificacion de video. OpenCV 4.10 no trae ningun codificador que los
+# navegadores acepten (VP8/VP9 abren pero escriben vacio, H.264 no existe), asi
+# que el servidor escribe con OpenCV y recodifica a H.264 con este ffmpeg.
+imageio-ffmpeg==0.6.0
+
 # Exportacion / inferencia
 onnxruntime-gpu==1.30.0
 requests==2.34.2
