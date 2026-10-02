@@ -708,3 +708,56 @@ caído**, y el rendimiento sin cambios (~20 fps en el motor).
 umbral de 12° y del emparejamiento, y **no se puede medir aquí** porque ningún
 dataset anota «cayéndose sin haber tocado el suelo». Corresponde al usuario
 comprobarlo con su vídeo.
+
+---
+
+# PARTE 11 — La máquina no veía lo que se ve en pantalla
+
+## Síntoma
+
+El vídeo subido va bien (verde → ámbar → rojo) pero el directo sigue fallando.
+Hipótesis del usuario: *«lo que se ve no es lo que ve la máquina»*.
+
+## La causa
+
+La cámara se capturaba a **10 fps** por defecto y el motor procesa unos 18-20.
+La interfaz tiene además un cerrojo (`cam.busy`): solo envía un fotograma
+cuando la petición anterior ha terminado.
+
+Resultado: **la máquina analizaba uno de cada tres fotogramas de los que se
+muestran**. Si la fase de pre-caída dura menos de ~200 ms —una persona que
+pierde el equilibrio y se recupera rápido— se le escapaba entera, y la
+transición visible era verde → rojo.
+
+En el vídeo no hay ese cuello: OpenCV decodifica y se procesa **todos** los
+fotogramas seguidos, sin muestreo y sin cola.
+
+## Descartado antes de tocar nada
+
+Se comprobaron las dos otras diferencias entre las rutas, con el mismo contenido:
+
+| hipótesis | resultado |
+|---|---|
+| Resolución (vídeo 640×352 vs webcam 1280×720) | **descartada**: 9 vs 10 aciertos, sin diferencia relevante |
+| Compresión JPEG q0.8 que aplica el navegador | **descartada**: resultados idénticos bit a bit |
+
+## Decisión
+
+1. **La captura de la webcam pasa a 30 fps por defecto.** El servidor descarta
+   los fotogramas que no puede procesar (deja 3 en cola), así que lo que
+   acaba viendo son los **más recientes**, no una muestra espaciada. La tasa
+   efectiva sube de ~10 a ~18 fps sostenidos, medido.
+2. **Se reactiva `TEMPLATES_AUTO_RELOAD`.** No era código temporal de
+   diagnóstico sino una omisión: sin él Flask cachea `index.html` en memoria y
+   un cambio de interfaz no se ve **ni recargando el navegador**, hay que
+   reiniciar el servidor. Durante esta sesión challenger丢失 cambios por
+   exactamente eso.
+
+Medido tras el cambio: el servidor sostiene **18.6 fps** con 0 errores en 60
+peticiones, frente a los 10 fps con los que estaba affirmations.
+
+**Límite honesto:** que esto recupera o no la fase ámbar **no se puede medir
+aquí**, porque ningún dataset anota «cayéndose sin haber tocado el suelo» ni se
+dispone del vídeo del usuario. Es una corrección fundada en el mecanismo
+medido —la máquinaampling uno de cada tres fotogramas— y verificada en que el
+flujo ya no limita la captura.

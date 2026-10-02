@@ -98,6 +98,11 @@ except Exception:                      # pragma: no cover
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 512 * 1024 * 1024   # 512 MB
+# Sin esto Flask cachea index.html en memoria y los cambios de la
+# interfaz no se ven ni con recarga forzada del navegador: hay que
+# reiniciar el servidor. Se deja activo porque la interfaz se itera
+# mucho durante el desarrollo.
+app.config["TEMPLATES_AUTO_RELOAD"] = True
 
 # El modelo se carga una sola vez y se protege con un lock: Flask atiende en
 # varios hilos y dos inferencias simultaneas sobre la misma GPU pueden fallar.
