@@ -155,12 +155,8 @@
               <option value="33">30 fps</option>
             </select>
           </label>
-          <label>Resolución
-            <select id="isz" style="background:#171a21;color:#e6e9ef;border:1px solid #262b36;border-radius:5px;padding:4px">
-              <option value="640">640 · precisa</option>
-              <option value="512">512 · rápida</option>
-              <option value="448">448 · muy rápida</option>
-            </select>
+          <label title="Desacoplado: el navegador no espera y llega a ~110 fps, pero las cajas se dibujan sobre el frame actual con datos de fotogramas anteriores, asi que van retrasadas.">
+            <input type="checkbox" id="fast"> Modo rápido (cajas con retardo)
           </label>
         </div>
         <div class="stage" id="scam">
@@ -484,7 +480,8 @@ $('#bcam').onclick = async () => {
     $('#cammeta').innerHTML =
       `${cam.ok ? 'conectada' : '<b style="color:#e03c3c">sin señal</b>'} · ` +
       `cámara ${v.videoWidth}×${v.videoHeight} → envío ${small.width}×${small.height} · ` +
-      `${cam.sent} frames · ${cam.fps.toFixed(1)} fps · imgsz ${$('#isz').value} · ` +
+      `${cam.sent} frames · ${cam.fps.toFixed(1)} fps · ` +
+      `${$('#fast').checked ? 'modo rápido (cajas retrasadas)' : 'modo sincrono'} · ` +
       `umbral ${$('#ccam').value}` +
       (cam.err ? ` · <b style="color:#e03c3c">${cam.err}</b>` : '');
   };
@@ -559,8 +556,13 @@ $('#bcam').onclick = async () => {
           if (!blob) throw new Error('el canvas no se pudo convertir en imagen');
           // Cuerpo binario crudo: evita el parser multipart de Werkzeug, que
           // con un JPEG de ~50 KB costaba ~17 ms por fotograma.
+          // Modo sincrono por defecto: las cajas van alineadas con lo que se
+          // ve. El modo rapido no espera al motor y llega a ~110 fps, pero
+          // entonces las cajas se dibujan sobre el frame actual con datos de
+          // fotogramas anteriores y se ven retrasadas.
+          const sync = $('#fast').checked ? 0 : 1;
           const r = await fetch('/api/frame?conf=' + $('#ccam').value +
-              '&imgsz=' + $('#isz').value + '&overlay=0',
+              '&overlay=0&sync=' + sync,
             {method:'POST', headers:{'Content-Type':'image/jpeg'}, body: blob});
           const d = await readJson(r);
           if (d.error) throw new Error(d.error);
