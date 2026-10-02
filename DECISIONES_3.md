@@ -815,3 +815,58 @@ cómo se comporte tu escena concreta.
 |---|---|
 | `v0.3-estable` | antes de evaluar el dataset de Kaggle |
 | `v0.4-captura-30fps` | estado actual |
+
+---
+
+# PARTE 13 — Evidencia anotada, descarga y paquete de alertas
+
+## Peticiones
+
+1. Alertas de cualquier ámbito.
+2. Poder descargar la imagen **con las cajas dibujadas**.
+3. En imagen fija, descarga manual. En vídeo y cámara en vivo, guardado
+   automático.
+4. Un único botón para descargar todo el paquete.
+
+## Lo que se corrigió
+
+**La evidencia se guardaba SIN dibujar.** `_persist` se ejecuta dentro de
+`step()`, antes de que el servidor pinte las cajas, así que la alerta se
+guardaba con el fotograma crudo y sin nada marcado. Ahora `_persist` deja la
+alerta en una cola `_pending` y el servidor, **después** de dibujar, llama a
+`flush_evidence()`, que escribe la imagen ya anotada y añade la línea al
+registro. Verificado sobre la imagen generada: recuadro y etiqueta visibles.
+
+**Alertas duplicadas en el registro.** Al mover la escritura del registro a
+`flush_evidence()`, quedó la llamada antigua en `_persist` y cada alerta se
+escribía dos veces en `alertas.jsonl`, la primera con `evidence: null`.
+Corregido: solo se escribe en `flush_evidence()`.
+
+**Error 500 en cámara en vivo.** `self._pending` se había inicializado por error
+dentro de `reset()` en lugar de `__init__`, así que no existía hasta la primera
+llamada y `_persist` lanzaba `AttributeError` en cuanto una alerta se disparaba.
+Movido a `__init__` y **no** se limpia en `reset()`: si una alerta ya se emitió,
+su imagen debe escribirse igualmente.
+
+## Implementado
+
+| petición | cómo |
+|---|---|
+| Alertas de cualquier tipo | `allow_alerts=True` por defecto; solo `persona_caido`, `persona_sentado` y `persona_desequilibrio` llevan `risk_type`, que es lo que dispara alerta. Las señales de postura (sin pasamanos, distracción, tambaleo) son indications, no eventos. |
+| Imagen **con las cajas** | evidencia escrita tras el dibujado |
+| Imagen fija | descarga manual con el botón "Descargar imagen con las cajas" |
+| Vídeo y cámara | guardado automático en `runs/alerts/<fecha>/` |
+| Un botón para todo | `GET /api/alertas.zip`, que se genera en memoria: imágenes + `alertas.jsonl` + un README. No deja ningún ZIP en disco. |
+
+**Las imágenes fijas no generan alertas** (`allow_alerts=False`): una foto no es
+un suceso en el tiempo, así que no debe dar lugar a una alerta aunque el riesgo
+persista en el reloj.
+
+## Verificado
+
+- Alerta emitida → 1 línea en `alertas.jsonl` → imagen anotada de 133 KB en
+  `runs/alerts/2026-10-02/`
+- ZIP: 133 KB con `2026-10-02/alerta_*.jpg`, `alertas.jsonl` y `README.txt`
+- 5/5 rutas GET responden 200; `/api/detect`, `/api/frame` y `/api/video`
+  responden 200
+- Intento de path traversal en `/api/alerta-imagen/` devuelve 404

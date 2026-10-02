@@ -306,6 +306,10 @@ class RiskEngine:
         self.alerts: deque = deque(maxlen=200)
         self.log_path = self.ALERT_DIR / "alertas.jsonl"
         self._alert_seq = 0
+        # Alertas disparadas en este fotograma a la espera de guardar su
+        # evidencia. No se limpia en `reset()`: si una alerta se ha emitido,
+        # su imagen debe escribirse igualmente.
+        self._pending: list = []
 
         # El seguimiento es IoU handmade (ver `_track`), no ByteTrack: se
         # descarto porque arrastra estado interno entre llamadas de forma
@@ -540,7 +544,7 @@ class RiskEngine:
             st.alerts[risk] = now
             meta = RISK_CATALOG.get(risk, {})
             self._alert_seq += 1
-            evidence = self._save_evidence(now)
+            evidence = None   # se escribe tras dibujar, ver flush_evidence()
             alert = Alert(
                 alert_id=f"ALT-{self._alert_seq:06d}",
                 timestamp=time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(now)),
@@ -554,8 +558,12 @@ class RiskEngine:
                 evidence=evidence,
                 duration_s=round(dur, 2),
             )
+            alert._ts = now                       # type: ignore[attr-defined]
             self.alerts.append(alert)
-            self._write_audit(alert)          # RQNF16
+            # La linea de auditoria se escribe en `flush_evidence()`, cuando la
+            # imagen ya esta dibujada. Escribirla aqui duplicaba cada alerta en
+            # alertas.jsonl y dejaba la primera con evidence=null.
+            self._pending.append(alert)
 
 
 
@@ -563,7 +571,24 @@ class RiskEngine:
     ALERT_KEEP_DAYS = 7
     ALERT_MAX_IMAGES = 200
 
-    def _save_evidence(self, now: float) -> str:
+    def flush_evidence(self, frame: np.ndarray) -> None:
+        """Guarda la imagen ANOTADA de las alertas disparadas en este fotograma.
+
+        La evidencia no puede escribirse dentro de `_persist`, que se ejecuta
+        durante `step()`, antes de que el servidor dibuje las cajas: se
+        guardaba el fotograma crudo y la alerta salia sin nada marcado. Ahora se
+        escribe aqui, ya dibujada, y se vuelca la linea en `alertas.jsonl`.
+        """
+        for alert in self._pending:
+            try:
+                alert.evidence = self._save_evidence(
+                    alert._ts, frame)          # type: ignore[attr-defined]
+                self._write_audit(alert)
+            except Exception as exc:            # noqa: BLE001
+                print(f"  [aviso] no se pudo guardar la evidencia: {exc}")
+        self._pending.clear()
+
+    def _save_evidence(self, now: float, frame: np.ndarray) -> str:
         """Guarda el fotograma ANOTADO como evidencia (RQF07, RQNF18).
 
         Carpeta `runs/alerts/<AAAA-MM-DD>/` y, en la raiz, un `alertas.jsonl`
@@ -572,7 +597,6 @@ class RiskEngine:
         limite.
         """
         import datetime
-        frame = getattr(self, "_last_frame", None)
         dia = datetime.date.fromtimestamp(now).isoformat()
         d = self.ALERT_DIR / dia
         d.mkdir(parents=True, exist_ok=True)
@@ -773,7 +797,6 @@ class RiskEngine:
         self._last_class = None
         self._last_tambaleo = False
         self._last_pose_landmarks = None
-        self._last_pose_landmarks = None
 
     def _find_people(self, frame: np.ndarray) -> list[list[int]]:
         """Detecta personas con el modelo COCO de 80 clases.
@@ -829,7 +852,8 @@ class RiskEngine:
                     best, bestc = name, c
         return best, bestc
 
-    def step(self, frame: np.ndarray, force: bool = False) -> dict:
+    def step(self, frame: np.ndarray, force: bool = False,
+            allow_alerts: bool = True) -> dict:
         """Procesa un fotograma y devuelve el estado completo del sistema.
 
         `force=True` ignora todas las cadencias y ejecuta pose, personas,
@@ -1056,9 +1080,10 @@ class RiskEngine:
         activos = {(d["track_id"], d["risk_type"]) for d in dets
                    if "risk_type" in d and d["confidence"] >= CONF_PREFILTER}
         self._forget_stale_risks(activos)
-        for d in dets:
-            if "risk_type" in d and d["confidence"] >= CONF_PREFILTER:
-                self._persist(d["track_id"], d["risk_type"], d)
+        if allow_alerts:
+            for d in dets:
+                if "risk_type" in d and d["confidence"] >= CONF_PREFILTER:
+                    self._persist(d["track_id"], d["risk_type"], d)
 
         # --- nivel global ---
         # `escalera` es CONTEXTO y una persona NEUTRA no aporta: para el

@@ -53,7 +53,10 @@
                margin-bottom:14px; max-height:340px; overflow:auto; }
   .alert-item { display:flex; gap:10px; padding:10px; border-bottom:1px solid #1d212a; }
   .alert-item:last-child { border-bottom:0; }
-  .alert-item img { width:64px; height:44px; object-fit:cover; border-radius:5px; flex-shrink:0; }
+  .alert-item img { width:96px; height:66px; object-fit:cover; border-radius:5px; flex-shrink:0;
+                    cursor:pointer; border:1px solid var(--line); }
+  .alert-item img:hover { border-color:var(--accent); }
+  .alert-desc { font-size:11.5px; color:#aab; margin-top:2px; }
   .alert-alto { border-left:3px solid var(--alto); }
   .alert-medio { border-left:3px solid var(--medio); }
   .alert-meta { font-size:11.5px; color:var(--muted); line-height:1.45; }
@@ -116,6 +119,10 @@
         <div class="card" style="margin-bottom:16px">
           <h2>Alertas · RQF08</h2>
           <div class="alert-box" id="alertbox1"><div class="req">Sin alertas.</div></div>
+          <a id="zipbtn" href="/api/alertas.zip" download="alertas.zip"
+             style="display:none;margin-top:10px;background:#4c8dff;color:#fff;
+                    border-radius:7px;padding:8px 14px;font-size:13px;text-decoration:none;
+                    display:inline-block">Descargar todo (ZIP)</a>
         </div>
         <div id="rimg"></div>
         <div class="card" style="margin-top:16px">
@@ -342,7 +349,16 @@ $('#bimg').onclick = async () => {
     const r = await fetch('/api/detect', {method:'POST', body:fd});
     const d = await readJson(r);
     if (d.error) { alert(d.error); return; }
-    $('#simg').innerHTML = `<img src="data:image/jpeg;base64,${hexToB64(d.image)}">`;
+    const b64 = hexToB64(d.image);
+    $('#simg').innerHTML =
+      `<img src="data:image/jpeg;base64,${b64}">
+       <div style="margin-top:10px">
+         <a id="dl-img" download="analisis_" + (f.name.replace(/\W+/g,'_')) + ".jpg"
+            href="data:image/jpeg;base64,${b64}"
+            style="background:#4c8dff;color:#fff;border-radius:7px;padding:8px 14px;
+                   font-size:13px;text-decoration:none;display:inline-block">
+           Descargar imagen con las cajas</a>
+       </div>`;
     $('#rimg').innerHTML = riskBox(d.summary) + `
       <div class="card">
         <h2>Métricas</h2>
@@ -640,7 +656,8 @@ async function cargarAlertas() {
   const lista = d.alertas || [];
   const html = lista.length ? lista.map(a => `
     <div class="alert-item ${a.severity==='ALTO'?'alert-alto':'alert-medio'}">
-      ${a.imagen ? `<img src="${a.imagen}" alt="">`
+      ${a.imagen ? `<a href="${a.imagen}" download title="Descargar">
+          <img src="${a.imagen}" alt=""></a>`
                  : '<div style="width:64px;height:44px;background:#0d0f14;border-radius:5px"></div>'}
       <div style="min-width:0">
         <div class="alert-tipo">${(a.risk_type||'').replace(/_/g,' ')}
@@ -648,12 +665,15 @@ async function cargarAlertas() {
         <div class="alert-meta">${(a.timestamp||'').replace('T',' ')} · ${a.duration_s}s ·
           id ${a.track_id} · conf ${((a.confidence||0)*100).toFixed(0)}%</div>
         <div class="alert-meta">${a.risk_ref||''}</div>
+        ${a.description ? `<div class="alert-desc">${a.description}</div>` : ''}
       </div>
     </div>`).join('') : '<div class="req">Sin alertas registradas.</div>';
   for (const id of ['alertbox1','alertbox2','alertbox3']) {
     const el = document.getElementById(id);
     if (el) el.innerHTML = html;
   }
+  const zb = document.getElementById('zipbtn');
+  if (zb) zb.style.display = d.total ? 'inline-block' : 'none';
 }
 document.addEventListener('DOMContentLoaded', () => {
   cargarAlertas();

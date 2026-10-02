@@ -172,7 +172,8 @@ class Inferencer:
                     out["value"] = self._job(
                         image, conf, imgsz,
                         draw=not out.get("no_draw", False),
-                        force=out.get("force", False))
+                        force=out.get("force", False),
+                        allow_alerts=out.get("allow_alerts", True))
                     # El ultimo resultado se guarda SIEMPRE, no solo en modo
                     # asincrono. Antes se guardaba bajo `if self._async`, pero
                     # la peticion restaura `_async = False` en su `finally`
@@ -197,7 +198,8 @@ class Inferencer:
             else:
                 out["done"].set()
 
-    def _job(self, image, conf, imgsz, draw=True, force=False):
+    def _job(self, image, conf, imgsz, draw=True, force=False,
+             allow_alerts=True):
         """Motor completo + dibujo, ambos dentro del hilo trabajador.
 
         El dibujo tambien se hace aqui a proposito: medir en esta maquina
@@ -208,7 +210,8 @@ class Inferencer:
             self._conf = conf
             self._engine.conf = conf
         t0 = time.perf_counter()
-        result = self._engine.step(image, force=force)
+        result = self._engine.step(image, force=force,
+                                   allow_alerts=allow_alerts)
         t_predict = (time.perf_counter() - t0) * 1000
 
         # En el modo `overlay=0` (camara en vivo) el navegador dibuja las cajas
@@ -225,6 +228,9 @@ class Inferencer:
              for s in result["postura"]] + [
             {**o, "confidence": o["conf"], "risk": o.get("riesgo", "CONTEXTO"),
              "bbox": o["bbox"], "ref": "RQF02 (1)"} for o in result["obstaculos"]]
+        # La evidencia de las alertas se guarda YA DIBUJADA: dentro de
+        # step() todavia no se han pintado las cajas.
+        self._engine.flush_evidence(out)
         t_draw = (time.perf_counter() - t1) * 1000
         return out, result, detections, {
             "predict": round(t_predict, 1), "draw": round(t_draw, 1),
@@ -248,14 +254,15 @@ class Inferencer:
         self._async = on
 
     def detect(self, image: np.ndarray, conf: float, imgsz: int, draw: bool = True,
-               force: bool = False):
+               force: bool = False, allow_alerts: bool = True):
         """Encola el trabajo y espera el resultado.
 
         En modo asincrono devuelve de inmediato el ultimo resultado disponible
         (o `None` si aun no hay ninguno). El frame se encola igualmente, asi
         que el motor sigue trabajando al ritmo que puede.
         """
-        out = {"done": threading.Event(), "no_draw": not draw, "force": force}
+        out = {"done": threading.Event(), "no_draw": not draw, "force": force,
+               "allow_alerts": allow_alerts}
         # "Solo el ultimo frame importa": si el motor no llega al ritmo de la
         # webcam, la cola crece y el resultado llega cada vez mas rancio. Se
         # descartan los frames en espera cuando se acumulan.
@@ -418,7 +425,7 @@ def api_detect():
     # obstaculos solo se evaluan en los fotogramas que tocan su cadencia, y al
     # recargar la misma imagen no cambia nada: la escena es la misma.
     annotated, result, dets, timing = _inferencer.detect(
-        image, conf, imgsz, draw=True, force=True)
+        image, conf, imgsz, draw=True, force=True, allow_alerts=False)
     t_all = (time.perf_counter() - t0) * 1000
     t_enc = time.perf_counter()
     payload = encode_jpeg(annotated).hex()
@@ -602,6 +609,40 @@ def api_alerta_imagen(dia: str, nombre: str):
     if not str(destino).startswith(str(base) + "/") or not destino.is_file():
         return jsonify({"error": "no encontrada"}), 404
     return send_file(str(destino), mimetype="image/jpeg")
+
+
+@app.get("/api/alertas.zip")
+def api_alertas_zip():
+    """Descarga TODAS las alertas en un unico ZIP (imagenes + jsonl).
+
+    Un solo boton en la interfaz para llevarse el paquete completo, tal y como
+    se pidio. Se genera al vuelo en memoria: no se deja ningun ZIP en disco.
+    """
+    import io as _io
+    import zipfile
+
+    d = RiskEngine.ALERT_DIR
+    buf = _io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        n = 0
+        if d.is_dir():
+            for f in sorted(d.glob("*/*.jpg")):
+                z.write(f, arcname=f"{f.parent.name}/{f.name}")
+                n += 1
+            jl = d / "alertas.jsonl"
+            if jl.is_file():
+                z.write(jl, arcname="alertas.jsonl")
+        z.writestr("README.txt",
+                   "Paquete de alertas del sistema de prevencion de caidas.\n"
+                   "Las imagenas estan anotadas con las detecciones y los rostros\n"
+                   "pixelizados (RQNF14, Ley 29733).\n"
+                   "alertas.jsonl lleva una linea por alerta con fecha, clase,\n"
+                   "severidad, confianza, duracion e identidad.\n")
+    buf.seek(0)
+    if n == 0:
+        return jsonify({"error": "aun no hay alertas registradas"}), 404
+    return send_file(buf, mimetype="application/zip", as_attachment=True,
+                     download_name="alertas.zip")
 
 
 @app.get("/api/cameras")
