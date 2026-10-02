@@ -291,9 +291,24 @@ function riskPanels(d) {
 function detTable(dets) {
   if (!dets.length) return '<div class="placeholder" style="padding:20px 0">Sin detecciones</div>';
   let h = '<table><tr><th>Clase</th><th>Conf.</th><th>Riesgo</th><th>Caja</th></tr>';
-  for (const d of dets)
-    h += `<tr><td>${d.class_name}</td><td>${(d.confidence*100).toFixed(0)}%</td>
-          <td>${d.risk}</td><td class="req">${d.bbox.join(', ')}</td></tr>`;
+  for (const d of dets) {
+    // La lista mezcla cajas de YOLO con obstaculos y senales de postura.
+    // Las senales de postura son condiciones leidas de keypoints: NO tienen
+    // caja (`bbox` undefined) y traen `tipo` en lugar de `class_name`.
+    // Sin estas guardas, `d.bbox.join` lanzaba TypeError en cuanto el motor
+    // emitia sin_pasamanos o tambaleo, es decir, en cualquier foto real de
+    // escalera.
+    const nombre = d.class_name || d.objeto ||
+                   String(d.tipo || '?').replace(/_/g, ' ');
+    const conf = (d.confidence ?? d.conf ?? 0);
+    // /api/detect devuelve la caja en PIXELES y /api/frame en normalizado,
+    // asi que no se pone ninguna unidad: se muestran los valores tal cual.
+    const caja = Array.isArray(d.bbox)
+      ? d.bbox.join(', ')
+      : '<span class="req">' + (d.ref || '—') + '</span>';
+    h += `<tr><td>${nombre}</td><td>${(conf * 100).toFixed(0)}%</td>
+          <td>${d.risk || '—'}</td><td class="req">${caja}</td></tr>`;
+  }
   return h + '</table>';
 }
 
@@ -360,9 +375,13 @@ $('#bvid').onclick = async () => {
 // las cajas en coordenadas normalizadas (0..1), asi que se escalan al canvas.
 const RISK_COLOR = {ALTO:'#e03c3c', MEDIO:'#f2a83c', BAJO:'#3fb85a',
                     NEUTRO:'#dcdcdc', CONTEXTO:'#c878c8'};
-function drawBoxes(src, dst, d, k) {
-  const w = src.width * k, h = src.height * k;
-  if (dst.width !== Math.round(w)) { dst.width = Math.round(w); dst.height = Math.round(h); }
+function drawBoxes(src, dst, d) {
+  // `src` ya es el canvas escalado que se envio al servidor, asi que NO se
+  // vuelve a multiplicar por una escala: hacerlo encogia el lienzo dos
+  // veces (con webcam de 1920 el lienzo acababa en 853 px en vez de 1280).
+  if (dst.width !== src.width || dst.height !== src.height) {
+    dst.width = src.width; dst.height = src.height;
+  }
   const c = dst.getContext('2d');
   c.drawImage(src, 0, 0, dst.width, dst.height);
   for (const b of d.detections) {
@@ -545,7 +564,7 @@ $('#bcam').onclick = async () => {
             {method:'POST', headers:{'Content-Type':'image/jpeg'}, body: blob});
           const d = await readJson(r);
           if (d.error) throw new Error(d.error);
-          drawBoxes(small, disp, d, small.width / cv.width);
+          drawBoxes(small, disp, d);
           $('#camrisk').innerHTML = riskBox(d.summary) + `
             <div class="stat"><span>Inferencia</span><b>${d.timing.predict} ms</b></div>
             <div class="stat"><span>Dibujo</span><b>${d.timing.draw} ms</b></div>

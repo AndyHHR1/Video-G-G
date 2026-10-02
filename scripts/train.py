@@ -15,13 +15,12 @@ Uso:
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import os
 import random
 import shutil
 import sys
-from collections import Counter, defaultdict
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
@@ -115,9 +114,14 @@ def build_balanced_dataset(cfg: dict) -> Path | None:
     rng = random.Random(int(cfg["seed"]))
 
     kept, dropped = 0, 0
+    # El recuento final se acumula AL ESCRIBIR cada etiqueta, no en una
+    # segunda pasada: antes se repetia la decision con `rng.random()`, pero
+    # `rng` es un unico generador, asi que la segunda vez sorteaba numeros
+    # nuevos y el recuento impreso no correspondia a `train_balanced`.
+    final: Counter = Counter()
     for (dirn, stem), cls in sorted(img_classes.items()):
         # Tasa de la imagen = la mas generosa entre sus clases, para no
-        #Discard una imagen que aporta a una clase que aun necesita datos.
+        # descartar una imagen que aporta a una clase que aun necesita datos.
         # Solo se recortan imagenes cuya clase unica esta por encima del techo.
         if cls and len(cls) == 1:
             only = next(iter(cls))
@@ -134,24 +138,17 @@ def build_balanced_dataset(cfg: dict) -> Path | None:
         _link(root / "labels" / dirn / f"{stem}.txt",
               root / "labels" / "train_balanced" / f"{dirn}__{stem}.txt")
         kept += 1
-
-    print(
-        f"  balanceo por cajas (objetivo {target_max}/clase): "
-        f"train {kept} imgs, {dropped} descartadas"
-    )
-    # recuento final en CAJAS, no en imagenes, para que las dos columnas
-    # sean comparables
-    final: Counter = Counter()
-    for (dirn, stem), cls in img_classes.items():
-        if cls and len(cls) == 1 and keep_rate.get(next(iter(cls)), 1.0) < 1.0:
-            if rng.random() > keep_rate[next(iter(cls))]:
-                continue
         lbl = root / "labels" / dirn / f"{stem}.txt"
         if lbl.is_file():
             for line in lbl.read_text().splitlines():
                 if line.strip():
                     final[int(float(line.split()[0]))] += 1
-    print("    cajas antes -> despues:")
+
+    print(
+        f"  balanceo por cajas (objetivo {target_max}/clase): "
+        f"train {kept} imgs, {dropped} descartadas"
+    )
+    print("    cajas antes -> despues (contadas sobre lo escrito):")
     for c in sorted(box_counts):
         flag = " <- recortada" if box_counts[c] > target_max else ""
         print(f"      {names.get(c, c):22} {box_counts[c]:>6} -> {final[c]:>6}{flag}")

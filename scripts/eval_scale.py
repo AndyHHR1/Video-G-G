@@ -18,7 +18,6 @@ Uso:
 from __future__ import annotations
 
 import argparse
-import glob
 from collections import Counter, defaultdict
 from pathlib import Path
 

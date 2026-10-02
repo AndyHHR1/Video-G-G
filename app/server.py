@@ -453,10 +453,15 @@ def api_frame():
     if image is None:
         return jsonify({"error": "no se pudo decodificar el frame"}), 400
 
-    if not overlay:
-        # camara en vivo: no se dibuja y no se espera a la inferencia
-        _inferencer.set_async(request.args.get("sync", "0") != "1")
-    got = _inferencer.detect(image, conf, imgsz, draw=overlay)
+    # El modo asincrono se activa SOLO para esta peticion. Antes se dejaba
+    # pegajoso (`set_async(True)` sin restaurar nunca), y al pasar a la
+    # pestana de imagen `/api/detect` devolvia el ultimo resultado de la
+    # camara en vez del de la imagen subida.
+    _inferencer.set_async(bool(not overlay and request.args.get("sync", "0") != "1"))
+    try:
+        got = _inferencer.detect(image, conf, imgsz, draw=overlay)
+    finally:
+        _inferencer.set_async(False)
     if got is None:
         return jsonify({"detections": [], "summary": summarise([]),
                         "riesgo": "BAJO", "timing": {"predict": 0, "draw": 0},
@@ -671,13 +676,13 @@ def _mjpeg(camera_index: int, conf: float, imgsz: int):
         yield b""
         return
     
-    fps_t, fps_n = time.perf_counter(), 0
+    fps_t, fps_n, fps = time.perf_counter(), 0, 0.0
     try:
         while True:
             ok, frame = cap.read()
             if not ok:
                 break
-            annotated, result, _d, _t = _inferencer.detect(frame, conf, imgsz)
+            annotated, result, dets, _t = _inferencer.detect(frame, conf, imgsz)
             fps_n += 1
             elapsed = time.perf_counter() - fps_t
             if elapsed >= 0.5:
