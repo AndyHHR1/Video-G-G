@@ -11,18 +11,33 @@ venv
 datasets/
 
 # --- Resultados de entrenamiento ---
-# Pesos (.pt de ~22 MB por corrida), metricas y graficas.
-# Los pesos se regeneran con scripts/train.py
+# Pesos (.pt de ~22 MB por corrida), metricas, graficas, alertas y evidencia.
+# Todo se regenera con scripts/train.py y scripts/evaluate.py
 runs/
 weights/
 
 # --- Pesos de modelos preentrenados descargados ---
 *.pt
 
+# --- Estado local del agente (Kilo) ---
+# No forma parte del entregable: contiene configuracion del editor y punteros
+# a worktrees, que jamas deben versionarse.
+.kilo/
+
+# --- Secretos y credenciales ---
+# PANEL_TOKEN (RQNF19) se lee de variable de entorno, nunca del repo.
+.env
+.env.*
+*.pem
+*.key
+*.p12
+kaggle.json
+
 # --- Python ---
 __pycache__/
 *.py[cod]
 *.egg-info/
+.pytest_cache/
 
 # --- Sistema ---
 .DS_Store

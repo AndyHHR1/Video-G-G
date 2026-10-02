@@ -16,15 +16,27 @@ torch==2.11.0+cu128
 torchvision==0.26.0+cu128
 
 # Stack de vision
+#
+# PIN CRITICO: numpy debe quedarse en <2 porque MediaPipe 0.10.21 lo exige,
+# y OpenCV debe quedarse en 4.x porque las 5.x exigen numpy>=2. Con las tres
+# cosas a la vez (numpy 2 + opencv 5 + mediapipe 0.10) el entorno no resuelve.
 ultralytics==8.4.170
-opencv-python==5.0.0.93
+opencv-python==4.10.0.84
 pillow==12.3.0
-numpy==2.5.2
+numpy==1.26.4
 matplotlib==3.11.2
 PyYAML==6.0.3
 
+# Motor de riesgo: postura y obstaculos (RQF02 1, 2 y 3)
+mediapipe==0.10.21
+
+# Plataforma web de pruebas
+Flask==3.1.3
+Werkzeug==3.1.5
+
 # Exportacion / inferencia
 onnxruntime-gpu==1.30.0
+requests==2.34.2
 
 # Utilidades de las librerias de CUDA (las instala torch como dependencias,
 # pero se fijan aqui para que el entorno sea exactamente reproducible)
