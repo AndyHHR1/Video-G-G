@@ -363,3 +363,59 @@ Todas las cifras de esta parte se tomaron con la GPU libre. `nvidia-smi` puede
 informar de varios GB de VRAM ocupados sin listar ningún proceso, que es
 memoria de otro contenedor o del escritorio del host; medir con esa carga da
 cifras falseadas y fue el origen del error de las partes 1-3.
+
+---
+
+# PARTE 6 — Evaluación del dataset sintético de Kaggle (DESCARTADO)
+
+Punto de retorno creado antes de empezar: **`git tag v0.3-estable`** sobre el
+commit `4810334`.
+
+## Qué se evaluó
+
+Kaggle `simuletic/cctv-incident-dataset-fall-and-lying-down-detection`
+(171 MB, CC BY-NC-SA 4.0). Dataset **sintético** de caídas en CCTV, con
+anotaciones de pose (17 keypoints). 111 imágenes de 1024×1024.
+
+Se construyó una **variante** (`scripts/build_kaggle_variant.py`) que añade
+esas imágenes **solo a train y val**, dejando el test idéntico, para que la
+comparación fuera justa. Las 111 imágenes son todas de la clase "tumbado":
+no hay ninguna de pie, así que no aporta contraste.
+
+## Resultado: empeora
+
+| modelo | val mAP50 | test mAP50 |
+|---|---|---|
+| base (entregado) | **0.810** | **0.747** |
+| variante + Kaggle | 0.696 | 0.698 |
+
+Por clase (val):
+
+| clase | base | + Kaggle |
+|---|---|---|
+| `persona_caido` | 0.900 | **0.947** |
+| `persona_sentado` | 0.821 | **0.527** |
+| `persona_erguida` | 0.930 | **0.682** |
+| `persona_desequilibrio` | 0.920 | **0.666** |
+
+La clase que el dataset pretendia reforzar (`persona_caido`) sube, pero
+**todas las demás se desploman**. Es transferencia negativa clásica: 89
+imágenes sintéticas de un parking con cámara cenital y viñeteado arrastraron
+al resto de las clases de postura, que vienen de fotos de stock e interiores
+reales.
+
+**Decisión: descartar.** Se borró la variante y se restauró la configuración.
+El modelo entregado sigue siendo `runs/yolov8s_zoom`.
+
+## Lo que esto confirma
+
+El salto **sintético → real** es exactamente el problema que había anticipado
+al revisar el dataset antes de descargarlo, y ahora está medido: no es una
+suposición razonable, son 11 puntos de mAP50 perdidos en val.
+
+También confirma que el cuello de botella no se resuelve con más imágenes de
+caída en general, sino con imágenes del **dominio exacto**: persona en una
+escalera vista de frente. Los vídeos del usuario siguen siendo la vía.
+
+El script `build_kaggle_variant.py` se conserva: documenta cómo se evaluó y
+permite reproducir el experimento, pero no se usa.
