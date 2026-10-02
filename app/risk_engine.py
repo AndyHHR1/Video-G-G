@@ -159,6 +159,11 @@ class TrackState:
 class RiskEngine:
     """Pipeline completo: deteccion -> pose -> contexto -> persistencia -> alerta."""
 
+    # Cuantas cajas de `escalera` se aceptan como mucho. Medido: en una foto
+    # real de escalera el modelo devolvia 6 cajas solapadas que cubrian el
+    # encuadre entero y no llegaba a considerar a la persona.
+    MAX_STAIRS_BOXES = 2
+
     def __init__(
         self,
         risk_weights: str,
@@ -167,8 +172,12 @@ class RiskEngine:
         conf: float = 0.25,
         enable_pose: bool = True,
         anonymize: bool = True,
-        pose_every: int = 3,
+        pose_every: int = 2,
         obstacle_every: int = 10,
+        stairs_every: int = 6,
+        people_every: int = 1,
+        person_imgsz: int = 512,
+        person_conf: float = 0.30,
     ):
         import mediapipe as mp
         from ultralytics import YOLO
@@ -178,8 +187,19 @@ class RiskEngine:
         self.anonymize = anonymize
         self.pose_every = pose_every
         self.obstacle_every = obstacle_every
-        self._last_obstacles: list = []
+        self.stairs_every = stairs_every
+        self.people_every = people_every
+        self.person_imgsz = person_imgsz
+        self.person_conf = person_conf
         self._pose_errors = 0
+        self._last_people: list = []
+        # Postura deducida en el ultimo frame en el que se evaluo la pose.
+        # La pose se calcula a una cadencia mas lenta que el frame (ver
+        # `pose_every`): sin esta cache, en los frames intermedios no habria
+        # keypoints y la clasificacion caeria a `persona` generica.
+        self._last_geom: str | None = None
+        self._last_stairs: list = []
+        self._last_obstacles: list = []
 
         # --- RQF02: detector de personas y escalera -----------------------
         self.det = YOLO(risk_weights)
@@ -208,11 +228,15 @@ class RiskEngine:
         self.enable_pose = enable_pose
         self.pose = None
         if enable_pose:
+            # static_image_mode=True: deteccion por fotograma. Con False el
+            # tracker no inicializa en la primera imagen de una secuencia y
+            # no devuelve pose; ademas la imagen puede venir de un fichero
+            # suelto y no de un video continuo.
             self.pose = mp.solutions.pose.Pose(
-                static_image_mode=False,
+                static_image_mode=True,
                 model_complexity=0,
-                min_detection_confidence=0.4,
-                min_tracking_confidence=0.4,
+                min_detection_confidence=0.3,
+                min_tracking_confidence=0.3,
             )
             # indices de MediaPipe Pose
             self.LW, self.RW = 15, 16      # muñecas
@@ -366,13 +390,18 @@ class RiskEngine:
                 "detalle": f"inclinación tronco {lean:.2f}, asimetría rodillas {knee_asym:.2f}",
             })
 
-        if signals:
-            out.append({
-                "landmarks": [(lm[i].x, lm[i].y) for i in
-                              (self.NOSE, self.LS, self.RS, self.LW, self.RW,
-                               self.LH, self.RH)],
-                "signals": signals,
-            })
+        # Se devuelve la persona SIEMPRE, con sus keypoints, aunque no haya
+        # ninguna señal de riesgo. Antes solo se añadia dentro de
+        # `if signals:`, y los keypoints desaparecian justamente en el caso
+        # que mas hace falta: una persona que camina recta y no dispara
+        # ninguna señal, donde no habia forma de deducir la postura.
+        out.append({
+            "landmarks": [(lm[i].x, lm[i].y) for i in
+                          (self.NOSE, self.LS, self.RS, self.LW, self.RW,
+                           self.LH, self.RH, self.LK, self.RK,
+                           self.LA, self.RA)],
+            "signals": signals,
+        })
         return out
 
     # ------------------------------------------------------------------ #
@@ -509,61 +538,158 @@ class RiskEngine:
     # ------------------------------------------------------------------ #
     # Pipeline
     # ------------------------------------------------------------------ #
+    # --- Clasificacion de postura por geometria (respaldo) -----------------
+    # Medido sobre tres fases de una prueba real (persona en una escalera):
+    #
+    #   fase                inclinacion   cabeza_sobre_cadera
+    #   caminando erguido       2.3 deg          1.02
+    #   tambaleandose           1.5 deg          0.75
+    #   caido en el suelo      51.5 deg          0.38
+    #
+    # `inclinacion` es el angulo del eje tobillo->cadera frente a la vertical:
+    # de pie son 2 grados, tumbado 51. Discrimina "caido" sin ambiguedad.
+    # `cabeza_sobre_cadera` es la altura de la nariz sobre la cadera,
+    # normalizada por la longitud del eje.
+    #
+    # Se descarto medir el aspecto ancho/alto del esqueleto: con el brazo en
+    # alto hacia la barandilla la caja se ensancha y daba 1.92 en una persona
+    # de pie, confundiendose con alguien caido.
+    #
+    # LIMITACION: calibrado con TRES imagenes. No es una metrica de precision,
+    # es un respaldo para cuando el detector no tiene opinion alguna, que es lo
+    # que ocurre en fotos reales de escalera, fuera de su dominio.
+    GEOM_CAIDO_INCLINA = 25.0
+    GEOM_CAIDO_CABEZA = 0.55
+    GEOM_DESEQUILIBRIO_CABEZA = 0.90
+
+    def _postura_por_geometria(self, pose: list[dict]) -> str | None:
+        """Deduce la postura de los keypoints. None si no hay pose.
+
+        Indices de `landmarks`: 0 nariz, 1/2 hombros, 3/4 munecas,
+        5/6 caderas, 7/8 rodillas, 9/10 tobillos.
+        """
+        if not pose or len(pose[0].get("landmarks", [])) < 11:
+            return None
+        pts = pose[0]["landmarks"]
+        hip = ((pts[5][0] + pts[6][0]) / 2, (pts[5][1] + pts[6][1]) / 2)
+        tob = ((pts[9][0] + pts[10][0]) / 2, (pts[9][1] + pts[10][1]) / 2)
+        largo = math.hypot(hip[0] - tob[0], hip[1] - tob[1])
+        if largo <= 0:
+            return None
+        inclinacion = math.degrees(
+            math.atan2(abs(hip[0] - tob[0]), abs(hip[1] - tob[1])))
+        cabeza = (hip[1] - pts[0][1]) / largo
+        if inclinacion > self.GEOM_CAIDO_INCLINA or cabeza < self.GEOM_CAIDO_CABEZA:
+            return "persona_caido"
+        if cabeza < self.GEOM_DESEQUILIBRIO_CABEZA:
+            return "persona_desequilibrio"
+        return "persona_erguida"
+
+    # --- Localizacion con COCO + clasificacion propia ---------------------- #
+    def _find_people(self, frame: np.ndarray) -> list[list[int]]:
+        """Detecta personas con el modelo COCO de 80 clases.
+
+        Es un detector general: en la prueba con una foto real de escalera
+        encontro a la persona al 0.92 mientras el modelo propio no llegaba a
+        0.08, porque la clase `escalera` saturaba el encuadre. El reparto
+        correcto es: COCO decide DONDE hay gente, el modelo propio decide QUE
+        POSTURA tiene.
+        """
+        res = self.obs.predict(
+            frame, conf=self.person_conf, iou=0.5, imgsz=self.person_imgsz,
+            device=self.device, verbose=False
+        )[0]
+        out = []
+        if res.boxes is None:
+            return out
+        for b in res.boxes:
+            if self.obs_names.get(int(b.cls[0])) != "person":
+                continue
+            x1, y1, x2, y2 = [int(v) for v in b.xyxy[0].tolist()]
+            if x2 - x1 > 8 and y2 - y1 > 8:
+                out.append([x1, y1, x2, y2])
+        return out
+
+    def _classify_person(self, frame: np.ndarray, box: list[int]) -> tuple[str, float]:
+        """Clasifica la postura recortando la persona y pasando el recorte.
+
+        El recorte se ajusta a la caja con un margen proporcional POR LADO y se
+        reescala a cuadrado. No se usa un cuadrado del lado
+        max(ancho,alto): con una persona alta (354x1073 en la prueba) eso daba
+        un recorte mas ancho que la imagen entera y la escalera dominaba.
+        """
+        H, W = frame.shape[:2]
+        x1, y1, x2, y2 = box
+        pad = 0.08
+        bw, bh = x2 - x1, y2 - y1
+        ax1 = int(max(0, x1 - bw * pad)); ax2 = int(min(W, x2 + bw * pad))
+        ay1 = int(max(0, y1 - bh * pad)); ay2 = int(min(H, y2 + bh * pad))
+        if ax2 - ax1 < 16 or ay2 - ay1 < 16:
+            return "", 0.0
+        crop = cv2.resize(frame[ay1:ay2, ax1:ax2], (640, 640),
+                          interpolation=cv2.INTER_LINEAR)
+        res = self.det.predict(crop, conf=0.20, device=self.device, verbose=False)[0]
+        best, bestc = "", 0.0
+        if res.boxes is not None:
+            for b in res.boxes:
+                name = self.risk_names.get(int(b.cls[0]), "")
+                if name == "escalera":       # no describe a una persona
+                    continue
+                c = float(b.conf[0])
+                if c > bestc:
+                    best, bestc = name, c
+        return best, bestc
+
     def step(self, frame: np.ndarray) -> dict:
         """Procesa un fotograma y devuelve el estado completo del sistema."""
         t0 = time.perf_counter()
         self._last_frame = frame
 
-        # --- deteccion de personas y escalera (RQF02) ---
-        res = self.det.predict(
-            frame, conf=self.conf, device=self.device, verbose=False
-        )[0]
-        dets: list[dict] = []
-        draw = []
-        if res.boxes is not None:
-            for b in res.boxes:
-                cid = int(b.cls[0])
-                x1, y1, x2, y2 = [int(v) for v in b.xyxy[0].tolist()]
-                name = self.risk_names.get(cid, str(cid))
-                det = {
-                    "class_id": cid, "class_name": name,
-                    "confidence": round(float(b.conf[0]), 4),
-                    "bbox": [x1, y1, x2, y2], "track_id": None,
-                    "riesgo": "CONTEXTO" if name == "escalera" else "NEUTRO",
-                    "ref": "",
-                }
-                # RQF03: la clase de la caja ya es una señal de riesgo
-                if name in FALL_CLASSES:
-                    det["riesgo"] = RISK_CATALOG[FALL_CLASSES[name]]["riesgo"]
-                    det["ref"] = RISK_CATALOG[FALL_CLASSES[name]]["ref"]
-                    det["risk_type"] = FALL_CLASSES[name]
-                elif name in NONERGO_CLASSES:
-                    det["riesgo"] = "MEDIO"
-                    det["ref"] = "RQF03"
-                    det["risk_type"] = NONERGO_CLASSES[name]
-                elif name in SAFE_CLASSES:
-                    det["riesgo"] = "BAJO"
-                    det["ref"] = "RQF03"
-                draw.append(det)
-                dets.append(det)
+        self._frame_no = getattr(self, "_frame_no", 0) + 1
+        run_extras = (self._frame_no % max(1, self.pose_every)) == 0
+        # Los obstaculos van a una cadencia MAS LENTA que la pose: una mochila
+        # en un escalon no aparece ni desaparece en tres fotogramas. Medido:
+        # YOLO riesgo 19.4 ms, pose 20.0 ms y obstaculos 20.3 ms.
+        run_obstacles = (self._frame_no % max(1, self.obstacle_every)) == 0
+        run_people = (self._frame_no % max(1, self.people_every)) == 0
+        run_stairs = (self._frame_no % max(1, self.stairs_every)) == 0
 
-        dets = self._track(dets)
-        confirmed, preliminary = self.apply_thresholds(dets)
+        # --- localizacion de personas con COCO (RQF02) ---
+        #
+        # Antes se pedia al modelo propio DONDE estaba la persona. En una foto
+        # real de escalera no encontraba a nadie (0.08 de confianza maxima)
+        # mientras COCO la encontraba al 0.92: la clase `escalera` saturaba
+        # el encuadre con seis cajas solapadas. Se invierte el reparto: COCO
+        # localiza, el modelo propio clasifica la postura.
+        # La cache de personas solo se reutiliza si ya hay alguna: en la
+        # primera imagen, o al cambiar de una a otra, la cache estaria vacia
+        # o seria de OTRA imagen y la persona no se detectaria.
+        people = self._find_people(frame) if (run_people or not self._last_people) \
+            else self._last_people
+        self._last_people = people
+
+        # --- escalera, con tope de cajas y cadencia lenta ---
+        # `escalera` es clase de CONTEXTO y no cambia entre fotogramas, pero
+        # su deteccion cuesta 19 ms: la mitad del presupuesto. Se reutiliza la
+        # ultima caja como con los obstaculos.
+        if run_stairs or not self._last_stairs:
+            res_s = self.det.predict(
+                frame, conf=0.30, iou=0.6, device=self.device, verbose=False
+            )[0]
+            found = []
+            if res_s.boxes is not None:
+                for b in res_s.boxes:
+                    if self.risk_names.get(int(b.cls[0])) == "escalera":
+                        found.append((float(b.conf[0]),
+                                      [int(v) for v in b.xyxy[0].tolist()]))
+            found.sort(reverse=True)
+            self._last_stairs = found[:self.MAX_STAIRS_BOXES]
+        stairs = self._last_stairs
 
         # --- postura (RQF02 2 y 3) ---
         # La pose y los obstaculos se calculan cada `pose_every` frames: son
         # dos inferencias mas y a 30 FPS sostenidos no caben en el presupuesto.
         # Las condiciones que sostienen (sujeccion del pasamanos, distraccion,
-        # objetos en el escalon) cambian en segundos, no en fotogramas.
-        self._frame_no = getattr(self, "_frame_no", 0) + 1
-        run_extras = (self._frame_no % max(1, self.pose_every)) == 0
-        # La cadencia de obstaculos es MAS LENTA que la de pose: una mochila
-        # abandonada en un escalon no aparece ni desaparece en tres fotogramas,
-        # y evaluarla cada 3 frames costaba 20 ms de los 32 del motor. Medido:
-        # con YOLO riesgo 19.4 ms, pose 20.0 ms y obstaculos 20.3 ms, bajar los
-        # obstaculos a 1 de cada 10 deja el motor en ~28 ms (35 fps) sin
-        # perdida apreciable de deteccion.
-        run_obstacles = (self._frame_no % max(1, self.obstacle_every)) == 0
         # La pose va envuelta: si falla, se pierde la señal de postura pero el
         # fotograma sigue produciendo detecciones y obstaculos. Antes un
         # TypeError aqui tumbaba `step()` entero y el endpoint devolvia 500.
@@ -599,6 +725,55 @@ class RiskEngine:
                     print(f"  [aviso] deteccion de obstaculos fallo: "
                           f"{type(exc).__name__}: {exc}", flush=True)
         obstacles = self._last_obstacles
+
+        # --- clasificacion de postura de cada persona ---
+        #
+        # Primero se recorta y se pasa por el modelo propio. Si el recorte no
+        # da ninguna clase de persona --que es lo que pasa con las fotos reales
+        # de escalera, fuera de su dominio-- se recurre a la geometria de la
+        # pose. Antes, cuando no habia clase, se informaba como `persona`
+        # generica: la caja aparecia pero sin ninguna postura.
+        dets: list[dict] = []
+        if pose:
+            self._last_geom = self._postura_por_geometria(pose)
+        geom = self._last_geom
+        for box in people:
+            name, conf_p = self._classify_person(frame, box)
+            origen = "modelo"
+            if not name and geom:
+                name, conf_p, origen = geom, 0.55, "geometria de pose"
+            if not name:
+                name, conf_p, origen = "persona", 0.4, "sin clasificar"
+            det = {
+                "class_id": self.id_of.get(name, 4),
+                "class_name": name,
+                "confidence": round(float(conf_p), 4),
+                "origen": origen,
+                "bbox": box, "track_id": None,
+                "riesgo": "NEUTRO", "ref": "",
+            }
+            if name in FALL_CLASSES:
+                det["riesgo"] = RISK_CATALOG[FALL_CLASSES[name]]["riesgo"]
+                det["ref"] = RISK_CATALOG[FALL_CLASSES[name]]["ref"]
+                det["risk_type"] = FALL_CLASSES[name]
+            elif name in NONERGO_CLASSES:
+                det["riesgo"] = "MEDIO"
+                det["ref"] = "RQF03"
+                det["risk_type"] = NONERGO_CLASSES[name]
+            elif name in SAFE_CLASSES:
+                det["riesgo"] = "BAJO"
+                det["ref"] = "RQF03"
+            dets.append(det)
+
+        dets = self._track(dets)
+        confirmed, preliminary = self.apply_thresholds(dets)
+
+        for conf_s, box in stairs:
+            dets.append({
+                "class_id": 3, "class_name": "escalera",
+                "confidence": round(conf_s, 4), "bbox": box,
+                "track_id": None, "riesgo": "CONTEXTO", "ref": "",
+            })
 
         # --- telefono cerca de la cabeza: RQF02 (3) confirmado por evidencia --
         # Un movil detectado por COCO no basta: puede estar suelto. Se cruza
