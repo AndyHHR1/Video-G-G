@@ -6,31 +6,38 @@
 # imagenes de entrenamiento ya hay volumen suficiente para que un modelo
 # mayor rinda, y Caso.md exige >=30 FPS (RQNF01) con >=6 GB de VRAM
 # (RQNF03): yolov8s a 640 ronda los 100 FPS de inferencia, muy por encima.
-# El baseline yolov8n de 5 clases quedo en runs/yolov8n_balanced.
+# El baseline yolov8n de 5 clases quedo en runs/yolov8n_balanced y la primera
+# version de 6 clases en runs/yolov8s_6clases.
 model: yolov8s
 
 # --- Datos ----------------------------------------------------------------
-data: datasets/combined/data.yaml
-# Nombre del yaml alternativo con la clase mas frecuente submuestreada.
-# `persona` concentra ~4.5k cajas frente a ~95 de `persona_sentado` y ~357
-# de `persona_desequilibrio`. Submuestrear la clase dominante sube el peso
-# efectivo de las clases de postura, que son las que el sistema necesita
-# para detectar riesgo.
+# `data_zoom.yaml` mezcla el train original con `images/train_zoom`, las
+# variantes de primer plano de scripts/add_zoom_variants.py. Cubren el rango
+# de escala que faltaba (persona cerca / parcialmente fuera de cuadro).
+data: datasets/combined/data_zoom.yaml
 balanced_data: datasets/combined/data_balanced.yaml
 use_balanced: true
-# Fraccion de la clase mayoritaria que se conserva al balancear.
-keep_majority_fraction: 0.45
+# Techo de cajas por clase en el recorte.
+#
+# Antes se hacia por fraccion de imagenes, lo que recortaba la clase
+# equivocada (ver nota en scripts/train.py). Con la fusion de `persona` dentro
+# de `persona_erguida` (parte 2) esa clase suma `fall` + Le2i `Stand` +
+# `tracking`, asi que es la mayor por legitimos motivos y lleva la UNICA
+# cobertura de personas de espaldas y lejanas. Con un techo de 900 quedaba en
+# 242 cajas y se perdia justo ese dato, de ahi que el techo sea 2000: recorta
+# el exceso sin aniquilar la clase.
+max_boxes_per_class: 1500
 
 # --- Entrenamiento --------------------------------------------------------
-epochs: 50
+epochs: 100
 imgsz: 640
 batch: 12
 seed: 42
 device: 0
 workers: 2
-patience: 15          # early stopping
+patience: 25          # early stopping
 project: runs
-name: yolov8s_6clases
+name: yolov8s_v3
 
 # --- Augmentaciones -------------------------------------------------------
 # RQNF12 pide resiliencia ante variaciones de iluminacion, asi que se refuerza

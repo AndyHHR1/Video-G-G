@@ -16,23 +16,37 @@ gravity was unstable", es decir, la perdida de equilibrio ANTES de caer.
 
 MAPEO DE CLASES
 ---------------
-    Blank    -> sin caja (negativo;RQF04 filtra falsos positivos)
+    Blank    -> sin caja (negativo; RQF04 filtra falsos positivos)
     Fall     -> 0 persona_caido
     Lie      -> 0 persona_caido
-    Likefall -> 5 persona_desequilibrio   <-- clase NUEVA de pre-caida
     Stand    -> 2 persona_erguida
+    Likefall -> 4 persona_desequilibrio   <-- clase de PRE-CAIDA
+
+    Se fusionaron a proposito dos cosas:
+
+    1. La taxonomia final tiene 5 clases y NO incluye una clase `persona`
+       generica. `Caso.md` RQF03 pide discriminar el transito seguro de la
+       conducta de riesgo, y con una clase generica el modelo se colgaba en
+       ella (76% de las predicciones) sin poder expresar riesgo. Todo peaton
+       recibe una postura; uno de espaldas va de pie.
+
+    2. `Fall` y `Lie` solo entran si se usa `--self-model`. Un detector COCO
+       no localiza de forma fiable a una persona tendida (sujeto muy
+       escorzado) y descartarlas dejaba `persona_caido` con ~250 cajas, la
+       clase mas escasa. El modelo propio, ya entrenado, si las ve.
 
 COMO SE GENERAN LAS CAJAS
 -------------------------
-Le2i es un dataset de CLASIFICACION: no trae bounding boxes. Las cajas se
-obtienen con un detector de personas preentrenado en COCO (yolov8s). Es una
-pseudo-etiquetacion, y por eso el script la VALIDA: informa el porcentaje de
-frames con persona detectada por clase. Si `Blank` mostrara muchas
-detecciones, la pseudo-etiquetacion no seria fiable y habria que descartar el
-approach.
+Por defecto con un detector de personas preentrenado en COCO. Con
+`--self-model`, con el modelo del proyecto.
+
+En ambos casos la salida se VALIDA antes de escribir nada: si `Blank` mostrara
+detecciones, o las clases con persona no se detectaran de forma consistente,
+el script aborta en vez de generar etiquetas ruidoas.
 
 Uso:
     python3 scripts/prepare_le2i.py --out datasets/le2i_yolo
+    python3 scripts/prepare_le2i.py --self-model runs/yolov8s_zoom/weights/best.pt
 """
 
 from __future__ import annotations
@@ -40,6 +54,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import re
 import time
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -49,6 +64,10 @@ ROOT = Path(__file__).resolve().parent.parent
 # Clase 0 en COCO: "person". Los modelos preentrenados de Ultralytics usan
 # el orden de clases de COCO, donde el indice 0 es justamente `person`.
 COCO_PERSON_ID = 0
+
+# Clases que representan una persona en la taxonomia del propio modelo.
+# `escalera` (id 3) queda fuera a proposito.
+SELF_PERSON_CLASSES = [0, 1, 2, 4, 5]
 
 # Frames consecutivos son casi identicos. Se conserva 1 de cada STRIDE[clase]
 # para evitar redundancia (que ademas inflaria el tiempo de epoca).
@@ -60,7 +79,7 @@ STRIDE = {
     "Blank": 10,
 }
 
-# Etiqueta de origen -> id de clase unificado
+# Etiqueta de origen -> id de clase unificado (taxonomia de 5 clases)
 CLASS_MAP = {
     "Fall": 0,      # persona_caido
     "Lie": 0,       # persona_caido
@@ -68,6 +87,24 @@ CLASS_MAP = {
     "Likefall": 5,  # persona_desequilibrio (PRE-CAIDA)
     "Blank": None,  # sin caja: es un negativo
 }
+
+# Clases que solo son fiables si las etiqueta el modelo del proyecto. Con un
+# detector COCO fallan porque una persona tendida esta muy escorzada.
+SELF_MODEL_ONLY = {"Fall", "Lie"}
+
+
+def base_video(folder: str) -> str:
+    """Nombre del video real, quitando el indice de clip.
+
+    En Le2i las carpetas se llaman `<escena>_v<video>c<clip>`: `coffee_v11c23`
+    y `coffee_v11c24` son clips 23 y 24 DEL MISMO video. Repartir por clips
+    metia frames casi identicos en train y en test; se comprobo que las 64
+    imagenes de test de `Likefall` desaparecian al eliminar duplicados, porque
+    todas tenian un gemelo byte a byte en train.
+
+    En `Blank` los nombres no llevan indice de clip, asi que aqui es un no-op.
+    """
+    return re.sub(r"c\d+$", "", folder)
 
 
 def main() -> None:
@@ -80,6 +117,20 @@ def main() -> None:
     ap.add_argument("--batch", type=int, default=8)
     ap.add_argument("--chunk", type=int, default=200,
                     help="Frames por tanda de deteccion. Acota el pico de RAM.")
+    ap.add_argument("--self-model", default=None,
+                    help="Pesos del modelo del proyecto. Si se indica, se usa "
+                         "en lugar del detector COCO y se habilitan las clases "
+                         "Fall/Lie, que el modelo propio si sabe localizar.")
+    ap.add_argument("--fall-lie-stride", type=int, default=4,
+                    help="Cadencia de muestreo para Fall y Lie.")
+    ap.add_argument("--exclude", default="",
+                    help="Clases de Le2i a EXCLUIR, separadas por comas.\n"
+                         "Ej: 'Fall,Lie'. Se usa para excluir `Lie`, que aunque "
+                         "se\nvalida bien (91% de deteccion) destruye la clase "
+                         "`persona_desequilibrio`:\nson el mismo sujeto en "
+                         "momentos consecutivos de las mismas escenas, de modo "
+                         "que\ncaida y pre-caida se vuelven indistinguibles "
+                         "(medido: 0.920 -> 0.267).")
     args = ap.parse_args()
 
     raw = args.raw.resolve()
@@ -92,9 +143,22 @@ def main() -> None:
     # ---------------------------------------------------------------- #
     # 1. Recolectar los frames a procesar (con su clase y su video)
     # ---------------------------------------------------------------- #
+    strides = dict(STRIDE)
+    if args.self_model:
+        strides["Fall"] = args.fall_lie_stride
+        strides["Lie"] = args.fall_lie_stride
+    else:
+        # sin modelo propio estas clases no se pueden etiquetar con fiabilidad
+        strides.pop("Fall", None)
+        strides.pop("Lie", None)
+    for c in [x.strip() for x in args.exclude.split(",") if x.strip()]:
+        if c in strides:
+            print(f"  excluida por --exclude: {c}")
+            strides.pop(c)
+
     items = []   # (ruta, clase, video_id, split_origen)
     for split in ("train", "val"):
-        for cls in STRIDE:
+        for cls in strides:
             base = raw / split / cls
             if not base.is_dir():
                 continue
@@ -103,7 +167,7 @@ def main() -> None:
                     p for p in video.iterdir()
                     if p.suffix.lower() in {".jpg", ".jpeg", ".png"}
                 )
-                stride = STRIDE[cls]
+                stride = strides[cls]
                 for i, frame in enumerate(frames):
                     if i % stride:
                         continue
@@ -111,7 +175,7 @@ def main() -> None:
     print(f"Frames seleccionados tras submuestreo: {len(items)}")
     by_cls = Counter(c for _, c, _, _ in items)
     for c, n in sorted(by_cls.items()):
-        print(f"  {c:9} {n:>6}  (stride {STRIDE[c]})")
+        print(f"  {c:9} {n:>6}  (stride {strides.get(c, 1)})")
 
     # ---------------------------------------------------------------- #
     # 2. Deteccion de personas con el modelo COCO
@@ -125,14 +189,17 @@ def main() -> None:
     # Con este codigo el pico de memoria es exactamente `batch` imagenes y no
     # hay estado que arrastrar entre lotes.
     # ---------------------------------------------------------------- #
-    print(f"\nDetectando personas con {args.weights} (conf>={args.conf})...")
     import cv2
     import numpy as np
     import torch
     from ultralytics.utils.nms import non_max_suppression
 
+    # con --self-model se usa el detector del proyecto; si no, el de COCO
+    model_path = args.self_model or args.weights
+    self_model = bool(args.self_model)
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    net = YOLO(args.weights).model.to(device).eval()
+    print(f"\nDetectando con {model_path} (conf>={args.conf})...")
+    net = YOLO(model_path).model.to(device).eval()
     net_cpu = None      # se crea bajo demanda si la GPU falla
     dets: dict[Path, list] = {}
     paths = [it[0] for it in items]
@@ -144,7 +211,7 @@ def main() -> None:
         if on == "cpu":
             if net_cpu is None:
                 print("\n  (GPU no disponible: se continua en CPU)", flush=True)
-                net_cpu = YOLO(args.weights).model.to("cpu").eval()
+                net_cpu = YOLO(model_path).model.to("cpu").eval()
             model = net_cpu
         batch_imgs = []
         usable: list[Path] = []
@@ -164,14 +231,14 @@ def main() -> None:
         tensor = torch.from_numpy(arr).permute(0, 3, 1, 2).contiguous().to(on)
         with torch.inference_mode():
             preds = model(tensor)
-        # salida: (batch, 4+1+nc, anchors) -> NMS -> lista de (n,6)
-        # `classes=[0]` es ESENCIAL: el detector es un modelo COCO de 80
-        # clases y sin este filtro cada silla, mesa o Television contaria como
-        # una persona (Le2i es de un unico sujeto, asi que la validacion de mas
-        # abajo lo detecta de inmediato).
+        # NMS con filtro de clases. Con COCO es imprescindible usar solo la
+        # clase 0 (`person`): sin ese filtro cada silla, mesa o television
+        # contaria como persona, y la validacion de mas abajo lo detecta.
+        # Con el modelo propio se aceptan las clases que son persona.
         out = non_max_suppression(
             preds, conf_thres=args.conf, iou_thres=0.45,
-            classes=[COCO_PERSON_ID], max_det=5,
+            classes=SELF_PERSON_CLASSES if self_model else [COCO_PERSON_ID],
+            max_det=5,
         )
         result = {}
         for path, det in zip(usable, out):
@@ -268,6 +335,11 @@ def main() -> None:
         )
 
     # Las clases que el proyecto necesita si o si no pueden fallar.
+    # `Fall` y `Lie` NO son criticas a proposito. `Lie` (persona ya en el
+    # suelo) la resuelve bien el modelo propio; `Fall` esta en pleno
+    # movimiento, con desenfoque, y se queda alrededor del 65%. Si se
+    # exigiera unListado estricto el script abortaria, cuando lo que interesa
+    # es aceptar `Lie` y descartar `Fall` sin perder lo demas.
     CRITICAL = {"Likefall", "Stand", "Blank"}
     missing = CRITICAL - set(stats) - rejected
     if missing or (CRITICAL & rejected):
@@ -281,10 +353,11 @@ def main() -> None:
         print(
             "\nSe descartan "
             + ", ".join(sorted(rejected))
-            + ".\n  Motivo: el detector COCO no localiza de forma fiable a una "
-            "persona\n  tendida en el suelo (sujeto escorzado). La clase "
-            "`persona_caido` ya\n  esta cubierta por las anotaciones humanas del "
-            "dataset `fall`, de modo que\n  no se pierde cobertura."
+            + ".\n  Motivo: el detector no alcanza el 80% de deteccion en esas "
+            "clases.\n  `Fall` esta en pleno movimiento y con desenfoque, y la "
+            "persona muy\n  escorzada se le escapa. La clase `persona_caido` "
+            "queda cubierta por\n  `Lie` (91%) y por las anotaciones humanas del "
+            "dataset `fall`."
         )
     blank_pct = 100 * stats["Blank"][1] / stats["Blank"][0] if stats["Blank"][0] else 0
     print(f"\nACEPTADO: {blank_pct:.0f}% de falsos positivos en 'Blank'.")
@@ -299,8 +372,17 @@ def main() -> None:
     # dataset unificado.
     # ---------------------------------------------------------------- #
     for split in ("train", "val", "test"):
+        # se limpia antes de escribir: si no, quedan archivos de ejecuciones
+        # anteriores y prepare_dataset.py lee el disco (no el manifest), con
+        # lo que se colarian muestras de un reparto viejo
         (out / "images" / split).mkdir(parents=True, exist_ok=True)
         (out / "labels" / split).mkdir(parents=True, exist_ok=True)
+        for stale in (out / "images" / split).iterdir():
+            if stale.is_file() or stale.is_symlink():
+                stale.unlink()
+        for stale in (out / "labels" / split).iterdir():
+            if stale.is_file() or stale.is_symlink():
+                stale.unlink()
 
     import random
     rng = random.Random(42)
@@ -308,18 +390,50 @@ def main() -> None:
     for it in items:
         if it[1] in rejected:      # clase que no supero la validacion
             continue
-        videos[(it[1], it[2])].append(it)     # agrupa por (clase, video)
+        # se agrupa por VIDEO BASE: los clips del mismo video no se separan
+        videos[(it[1], base_video(it[2]))].append(it)
 
-    keys = sorted(videos)
-    rng.shuffle(keys)
-    n = len(keys)
-    n_test = max(1, round(n * 0.15))
-    n_val = max(1, round(n * 0.15))
-    assign = {}
-    for i, k in enumerate(keys):
-        assign[k] = (
-            "test" if i < n_test else "val" if i < n_test + n_val else "train"
-        )
+    # Reparto ESTRATIFICADO POR CLASE.
+    #
+    # Con un shuffle global de videos la clase mas escasa se quedaba sin
+    # representacion: `persona_desequilibrio` (que solo son 6-10 videos)
+    # acababa con 171 cajas en val y 17 en test, que hace su mAP insensible.
+    # Repartiendo los videos de cada clase por separado, cada clase recibe
+    # proporcion parecida en los tres splits.
+    assign: dict[tuple[str, str], str] = {}
+    by_class: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    for key in videos:
+        by_class[key[0]].append(key)
+        # Reparto por tamaño de video, alternando val y test.
+    #
+    # Un reparto proporcional en numero de videos no equilibra nada cuando hay
+    # pocos: `Likefall` tiene 12 videos de base y un codicioso por frames dejaba
+    # 304 train / 32 val / 80 test, con un val tan fino que el early stopping
+    # se guiaba casi a ciegas.
+    #
+    # Aqui se ordena cada clase de mayor a menor tamano: los mas grandes se van
+    # a train (que debe conservar la mayor parte) y el resto se alterna entre
+    # test y val, de modo que ambos reciben aproximadamente las mismas cajas.
+    for cls in sorted(by_class):
+        keys = sorted(by_class[cls], key=lambda k: (-len(videos[k]), k))
+        n = len(keys)
+        n_test = max(1, round(n * 0.15))
+        n_val = max(1, round(n * 0.15))
+        n_holdout = n_test + n_val
+        n_train = max(1, n - n_holdout)
+        for i, k in enumerate(keys):
+            if i < n_train:
+                assign[k] = "train"
+            else:
+                # se alterna sobre el resto, empezando por test
+                j = i - n_train
+                assign[k] = "test" if j % 2 == 0 else "val"
+        # si el reparto final dejo un split vacio, se roba el video mas pequeno
+        for s in ("test", "val"):
+            if not any(v == s for k, v in assign.items() if k[0] == cls):
+                cand = [k for k in keys if assign[k] == "train"]
+                if cand:
+                    assign[cand[-1]] = s
 
     manifest = []
     written = Counter()
@@ -350,7 +464,8 @@ def main() -> None:
             written[split] += 1
             manifest.append({
                 "split": split, "origin": "le2i", "class_name": cls,
-                "video": vid, "out_name": dst_img.name,
+                "video": vid, "clip": key[1],
+                "out_name": dst_img.name,
                 "n_boxes": len(rows), "src_image": str(path),
             })
 

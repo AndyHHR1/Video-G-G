@@ -34,18 +34,23 @@ ROOT = Path(__file__).resolve().parent.parent
 # Balanceo de clases
 # --------------------------------------------------------------------------- #
 def build_balanced_dataset(cfg: dict) -> Path | None:
-    """Crea un subconjunto de entrenamiento con la clase mas frecuente submuestreada.
+    """Crea un subconjunto de entrenamiento con las clases dominantes recortadas.
 
-    El dataset unificado esta muy desbalanceado: las clases que dominan son
-    `persona` (CCTV, muchas cajas por fotograma) y `escalera`, frente a las
-    clases de postura `persona_caido` / `persona_sentado` / `persona_erguida`,
-    que aportan menos de un tercio de las cajas de entrenamiento.
+    El objetivo es que ninguna clase domine el gradiente. `persona` aporta
+    ~4.5k cajas de CCTV frente a ~1.4k de todas las clases de postura juntas, y
+    el modelo colapsa sobre ella: medido, predecía `persona` el 96% de las
+    veces y apenas repartia el resto.
 
-    Aqui se identifica la clase con mas IMAGENES propias (no la que mas cajas
-    tiene: `persona` aparece en pocos fotogramas pero con muchas cajas cada
-    uno) y se conserva solo una fraccion de ellas. Es la clase que mas
-    diluye el gradiente sobre el resto. Sin tocar los originales: lo que se
-    crean son symlinks nuevos bajo `images/train_balanced/`.
+    IMPORTANTE (correccion de un bug anterior): el recorte se decide por
+    CONTEO DE CAJAS, no de imagenes. Contar imagenes seleccionaba
+    `persona_erguida` --que aparecia en mas imagenes por el peso de Le2i
+    Stand-- y la recortaba a la mitad, justo la clase que mas falta hacia
+    falta, mientras `persona` se dejaba intacta. El desbalance real esta en
+    las cajas, no en las imagenes.
+
+    Como un recorte es una transformacion geometrica exacta de las cajas,
+    aplicar el mismo recorte a las variantes de primer plano mantiene las
+    etiquetas correctas.
 
     Devuelve la ruta del data.yaml generado, o None si no aplica.
     """
@@ -55,58 +60,105 @@ def build_balanced_dataset(cfg: dict) -> Path | None:
     root = data_path.parent
     names = _read_names(data_path)
 
-    train_img = root / "images" / "train"
-    train_lbl = root / "labels" / "train"
-    out_img = root / "images" / "train_balanced"
-    out_lbl = root / "labels" / "train_balanced"
-    for d in (out_img, out_lbl):
-        d.mkdir(parents=True, exist_ok=True)
+    train_dirs = _train_dirs(root, cfg)          # p.ej. train y train_zoom
+    target_max = int(cfg.get("max_boxes_per_class", 900))
 
-    # Clase dominante = la presente en mas imagenes propias (no la que mas
-    # cajas aporta). `persona` tiene muchisimas cajas pero se concentra en
-    # pocos fotogramas de CCTV con varios sujetos cada uno, asi que la
-    # metrica adecuada para decidir a quien submuestrear es el conteo de
-    # imagenes, no el de instancias.
-    per_class = Counter()
-    img_classes: dict[str, set] = defaultdict(set)
-    for lbl in train_lbl.glob("*.txt"):
-        cls = set()
-        for line in lbl.read_text().splitlines():
-            if line.strip():
-                cls.add(int(float(line.split()[0])))
-        img_classes[lbl.stem] = cls
-        per_class.update(cls)
+    for d in train_dirs:
+        (root / "images" / d).mkdir(parents=True, exist_ok=True)
+        (root / "labels" / d).mkdir(parents=True, exist_ok=True)
+    # salida: symlinks, nunca copias, para no duplicar los ~600 MB
+    for d in ("train_balanced",):
+        for sub in ("images", "labels"):
+            shutil.rmtree(root / sub / d, ignore_errors=True)
+            (root / sub / d).mkdir(parents=True, exist_ok=True)
 
-    if not per_class:
-        print("  [aviso] no hay cajas en train; no se balancea")
+    # ---- inventario: cajas e imagenes por clase ------------------------- #
+    img_classes: dict[tuple[str, str], set] = {}
+    box_counts: Counter = Counter()
+    for d in train_dirs:
+        img_dir, lbl_dir = root / "images" / d.name, root / "labels" / d.name
+        if not lbl_dir.is_dir():
+            continue
+        for lbl in sorted(lbl_dir.glob("*.txt")):
+            stem = lbl.stem
+            img = next(
+                (img_dir / f"{stem}{e}" for e in (".jpg", ".jpeg", ".png")
+                 if (img_dir / f"{stem}{e}").is_file()), None,
+            )
+            if img is None:
+                continue
+            cls = {int(float(l.split()[0]))
+                   for l in lbl.read_text().splitlines() if l.strip()}
+            img_classes[(d.name, stem)] = cls
+            # se cuentan CAJAS reales, no clases-imagen: una foto de CCTV con
+            # cinco pedestrians aporta cinco cajas de `persona`, y eso es
+            # justo lo que compite en el gradiente
+            for line in lbl.read_text().splitlines():
+                if line.strip():
+                    box_counts[int(float(line.split()[0]))] += 1
+
+    if not box_counts:
+        print("  [aviso] no hay cajas; no se balancea")
         return None
 
-    major = per_class.most_common(1)[0][0]
-    frac = float(cfg["keep_majority_fraction"])
+    # clases que superan el objetivo, con su tasa de conservacion necesaria
+    # para llegar al techo. Es adaptativa por clase porque un recorte fijo
+    # penaliza a las clases menos numerosas, que son justo las que mas
+    # necesitan senal.
+    keep_rate: dict[int, float] = {}
+    for c, n in box_counts.items():
+        keep_rate[c] = 1.0 if n <= target_max else target_max / n
+    over = [c for c, n in box_counts.items() if n > target_max]
+    if not over:
+        print(f"  balanceo: ninguna clase supera {target_max} cajas; se usa tal cual")
+    major = box_counts.most_common(1)[0][0]
     rng = random.Random(int(cfg["seed"]))
 
-    kept = dropped = 0
-    by_stem = {p.stem: p for p in train_img.iterdir() if p.is_file()}
-    for stem, cls in sorted(img_classes.items()):
-        src_img = by_stem.get(stem)
-        if src_img is None:
+    kept, dropped = 0, 0
+    for (dirn, stem), cls in sorted(img_classes.items()):
+        # Tasa de la imagen = la mas generosa entre sus clases, para no
+        #Discard una imagen que aporta a una clase que aun necesita datos.
+        # Solo se recortan imagenes cuya clase unica esta por encima del techo.
+        if cls and len(cls) == 1:
+            only = next(iter(cls))
+            if keep_rate.get(only, 1.0) < 1.0 and rng.random() > keep_rate[only]:
+                dropped += 1
+                continue
+        src = next(
+            (root / "images" / dirn / f"{stem}{e}" for e in (".jpg", ".jpeg", ".png")
+             if (root / "images" / dirn / f"{stem}{e}").is_file()), None,
+        )
+        if src is None:
             continue
-        # si la imagen contiene la clase mayoritaria Y solo ella, se submuestrea
-        if cls == {major} and rng.random() > frac:
-            dropped += 1
-            continue
-        _link(src_img, out_img / src_img.name)
-        _link(train_lbl / f"{stem}.txt", out_lbl / f"{stem}.txt")
+        _link(src, root / "images" / "train_balanced" / f"{dirn}__{stem}{src.suffix}")
+        _link(root / "labels" / dirn / f"{stem}.txt",
+              root / "labels" / "train_balanced" / f"{dirn}__{stem}.txt")
         kept += 1
 
     print(
-        f"  balanceo: clase mayoritaria '{names.get(major, major)}' "
-        f"submuestreada al {frac:.0%}  (train {kept} imgs, {dropped} descartadas)"
+        f"  balanceo por cajas (objetivo {target_max}/clase): "
+        f"train {kept} imgs, {dropped} descartadas"
     )
+    # recuento final en CAJAS, no en imagenes, para que las dos columnas
+    # sean comparables
+    final: Counter = Counter()
+    for (dirn, stem), cls in img_classes.items():
+        if cls and len(cls) == 1 and keep_rate.get(next(iter(cls)), 1.0) < 1.0:
+            if rng.random() > keep_rate[next(iter(cls))]:
+                continue
+        lbl = root / "labels" / dirn / f"{stem}.txt"
+        if lbl.is_file():
+            for line in lbl.read_text().splitlines():
+                if line.strip():
+                    final[int(float(line.split()[0]))] += 1
+    print("    cajas antes -> despues:")
+    for c in sorted(box_counts):
+        flag = " <- recortada" if box_counts[c] > target_max else ""
+        print(f"      {names.get(c, c):22} {box_counts[c]:>6} -> {final[c]:>6}{flag}")
 
     out_yaml = root / "data_balanced.yaml"
     out_yaml.write_text(
-        f"# Generado por scripts/train.py (NO editar a mano).\n"
+        "# Generado por scripts/train.py (NO editar a mano).\n"
         f"path: {root.resolve()}\n"
         f"train: images/train_balanced\n"
         f"val: images/val\n"
@@ -116,6 +168,18 @@ def build_balanced_dataset(cfg: dict) -> Path | None:
         encoding="utf-8",
     )
     return out_yaml
+
+
+def _train_dirs(root: Path, cfg: dict) -> list[Path]:
+    """Directorios de entrenamiento declarados en el yaml (admite lista)."""
+    import yaml as _y
+    data = _y.safe_load(Path(cfg["data"]).read_text()) \
+        if Path(cfg["data"]).is_absolute() else \
+        _y.safe_load((ROOT / cfg["data"]).read_text())
+    train = data.get("train", "images/train")
+    entries = train if isinstance(train, list) else [train]
+    # se queda solo con el nombre del directorio, relativo a `path` del yaml
+    return [Path(Path(e).name) for e in entries]
 
 
 def _link(src: Path, dst: Path) -> None:
@@ -135,13 +199,21 @@ def _read_names(data_path: Path) -> dict[int, str]:
 # --------------------------------------------------------------------------- #
 # Evaluacion
 # --------------------------------------------------------------------------- #
-# Clases cuyas etiquetas de test proceden de anotacion HUMANA. La clase
-# `persona` queda fuera a proposito: sus 11 secuencias de test solo tienen
-# `det/det.txt`, que es salida de un detector, no ground truth. Como el modelo
-# predice mejor que ese pseudo-ground-truth, incluirla baja artificialmente la
-# metrica. Se reportan las dos cifras: con y sin ella.
-GT_HUMAN_CLASSES = ("persona_caido", "persona_sentado", "persona_erguida",
-                    "escalera", "persona_desequilibrio")
+# Procedencia de las etiquetas de test, clase por clase:
+#
+#   persona_caido         `fall` (GT humano) + Le2i `Lie` (pseudo, validada 91%)
+#   persona_sentado       `fall` (GT humano)
+#   persona_erguida       `fall` (GT humano) + Le2i `Stand` (pseudo) +
+#                         `tracking` (pseudo-etiquetas de detector)
+#   escalera              `stairs` (GT humano)
+#   persona_desequilibrio Le2i `Likefall` (pseudo, validada 100%)
+#
+# `persona_erguida` es la unica que MEZCLA anotacion humana con
+# pseudo-etiquetas, porque en la parte 2 se fusiono ahi la clase `persona`
+# de CCTV para eliminar la clase generica que se tragaba el 76% de las
+# predicciones. Por eso se reporta tambien un mAP50 restringido a las clases
+# de etiqueta inequivocamente humana.
+GT_HUMAN_CLASSES = ("persona_sentado", "escalera")
 
 
 def evaluate(model, data: str, split: str, device, imgsz, batch, out_dir: Path) -> dict:
@@ -220,9 +292,9 @@ def save_report(path: Path, cfg: dict, metrics: dict) -> None:
         ]
         if "mAP50_gt_humano" in m:
             lines += [
-                f"  mAP50 (solo clases con GT humano, sin `persona`): "
+                f"  mAP50 (solo clases con GT humano inequivocable): "
                 f"{m['mAP50_gt_humano']:.4f}",
-                f"  mAP50-95 (ídem)                                 : "
+                f"  mAP50-95 (ídem)                                   : "
                 f"{m['mAP50_95_gt_humano']:.4f}",
             ]
         lines += ["", "  clase                 mAP50   mAP50-95"]
