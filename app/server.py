@@ -167,9 +167,14 @@ class Inferencer:
                 else:
                     out["value"] = self._job(image, conf, imgsz,
                                              draw=not out.get("no_draw", False))
-                    if self._async:
-                        with self._lock_async:
-                            self._last_async = out["value"]
+                    # El ultimo resultado se guarda SIEMPRE, no solo en modo
+                    # asincrono. Antes se guardaba bajo `if self._async`, pero
+                    # la peticion restaura `_async = False` en su `finally`
+                    # antes de que el worker termine: el cache se quedaba
+                    # siempre vacio y la camara en vivo no devolvia NUNCA
+                    # detecciones (siempre `pendiente: true`).
+                    with self._lock_async:
+                        self._last_async = out["value"]
             except BaseException as exc:          # noqa: BLE001
                 # `finally` en vez de `except`: si `out["done"]` no fuera un
                 # Event, el `.set()` lanzaba AttributeError y el hilo
@@ -244,6 +249,14 @@ class Inferencer:
         que el motor sigue trabajando al ritmo que puede.
         """
         out = {"done": threading.Event(), "no_draw": not draw}
+        # "Solo el ultimo frame importa": si el motor no llega al ritmo de la
+        # webcam, la cola crece y el resultado llega cada vez mas rancio. Se
+        # descartan los frames en espera cuando se acumulan.
+        while self._q.qsize() > 3:
+            try:
+                self._q.get_nowait()
+            except queue.Empty:
+                break
         self._q.put((image, conf, imgsz, out))
         if self._async:
             with self._lock_async:
