@@ -48,7 +48,7 @@ CONF_CONFIRM = 0.85        # RQF04: umbral de confirmacion
 # no llega a 0.75 de confianza: son objetos pequenos y parcialmente ocultos.
 # Con 0.75 el detector de obstaculos no encontraba practicamente nada, que es
 # exactamente el fallo reportado.
-CONF_OBSTACLE = 0.35
+CONF_OBSTACLE = 0.25
 PERSIST_SECONDS = 3.0      # RQF06: persistencia minima
 OCCLUSION_SECONDS = 1.0    # RQF05: oclusion tolerada
 ALERT_COOLDOWN = 15.0      # evita rafaga de alertas repetidas
@@ -89,14 +89,25 @@ SAFE_CLASSES = {"persona_erguida"}
 # Objetos de COCO que, si aparecen sobre la escalera, son obstáculos.
 # Un cliente con el movil en la mano NO es un obstaculo; por eso `cell phone`
 # queda fuera de esta lista y se trata aparte como distraccion.
-# Mobiliario (silla, carrito) queda FUERA a proposito: no es un objeto
-# abandonado sobre un escalon, y con el umbral bajo de deteccion aparecia como
-# falso positivo constante en interiores.
-OBSTACLE_CLASSES = {
+# Objetos que constituyen un OBSTACULO real en la escalera -> riesgo ALTO.
+OBSTACLE_RISK = {
     "backpack": "mochila", "handbag": "bolso", "suitcase": "maleta",
-    "bottle": "botella", "book": "libro", "box": "caja",
-    "traffic cone": "cono",
+    "bottle": "botella", "book": "libro", "umbrella": "paraguas",
 }
+
+# Mobiliario: no es un riesgo por si mismo, pero forma parte de la escena y
+# se dibuja como CONTEXTO. Antes se eliminaba del filtro, y eso hacia que
+# las sillas y bancos que el detector si encontraba dejaran de aparecer: el
+# usuario lo describio como "objetos que antes salian y ahora no".
+OBSTACLE_CONTEXT = {
+    "chair": "silla", "couch": "sofá", "bench": "banco",
+    "potted plant": "planta",
+}
+
+# Union de ambas. NOTA: `box`, `traffic cone` y `cart` NO existen en el
+# voculario de 80 clases de Ultralytics; se habian escrito por error y nunca
+# pudieron coincidir con nada.
+OBSTACLE_CLASSES = {**OBSTACLE_RISK, **OBSTACLE_CONTEXT}
 
 RISK_COLOR = {
     "ALTO": (60, 60, 235), "MEDIO": (60, 170, 245),
@@ -182,6 +193,8 @@ class RiskEngine:
             {int(k): v for k, v in obs_raw.items()}
         self.obs_ids = {k: v for k, v in self.obs_names.items()
                         if v in OBSTACLE_CLASSES}
+        self.obs_risk_ids = {k for k, v in self.obs_ids.items()
+                             if v in OBSTACLE_RISK}
 
         # --- RQF02 (2) y (3): postura ------------------------------------
         self.enable_pose = enable_pose
@@ -370,9 +383,11 @@ class RiskEngine:
             if cid not in self.obs_ids:
                 continue
             x1, y1, x2, y2 = [int(v) for v in b.xyxy[0].tolist()]
+            es_riesgo = cid in self.obs_risk_ids
             out.append({
-                "tipo": "obstaculo_escalon",
+                "tipo": "obstaculo_escalon" if es_riesgo else "elemento_escena",
                 "objeto": self.obs_names[cid],
+                "riesgo": "ALTO" if es_riesgo else "CONTEXTO",
                 "conf": round(float(b.conf[0]), 3),
                 "bbox": [x1, y1, x2, y2],
             })
@@ -577,7 +592,10 @@ class RiskEngine:
         # veredicto solo cuentan las señales con consecuencia (RQF03)
         risks = [d["riesgo"] for d in dets if d["riesgo"] in ("ALTO", "MEDIO")]
         risks += [p["riesgo"] for p in pose_signals]
-        risks += ["ALTO"] * len(obstacles)
+        # solo los obstaculos de riesgo suben el veredicto; el mobiliario
+        # es informacion de escena
+        risks += ["ALTO"] * sum(1 for o in obstacles
+                                if o.get("riesgo") == "ALTO")
         level = max(risks, key=lambda r: {"ALTO": 3, "MEDIO": 2}.get(r, 0),
                                           default="BAJO")
 

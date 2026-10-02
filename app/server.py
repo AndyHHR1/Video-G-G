@@ -226,18 +226,25 @@ def draw_all(frame: np.ndarray, result: dict) -> list[dict]:
         out.append({**d, "class_name": info["name"], "risk": info["risk"]})
 
     for o in result.get("obstaculos", []):
+        # El mobiliario se dibuja en color de contexto: es(scene), no riesgo.
+        # Los objetos abandonados sobre el escalon van en rojo y si suman al
+        # veredicto de riesgo.
+        es_riesgo = o.get("riesgo") == "ALTO"
+        col = RISK_COLOR["ALTO"] if es_riesgo else RISK_COLOR["CONTEXTO"]
+        prefijo = "OBSTACULO" if es_riesgo else "ESCENA"
         x1, y1, x2, y2 = o["bbox"]
-        col = RISK_COLOR["ALTO"]
         cv2.rectangle(frame, (x1, y1), (x2, y2), col, 2)
-        label = f'OBSTACULO {o["objeto"]} {o["conf"]:.0%}'
+        label = f'{prefijo} {o["objeto"]} {o["conf"]:.0%}'
         (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)
         cv2.rectangle(frame, (x1, max(0, y1 - th - 6)), (x1 + tw + 8, y1),
                       col, -1)
         cv2.putText(frame, label, (x1 + 4, max(th + 2, y1 - 4)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (20, 20, 20), 2, cv2.LINE_AA)
         out.append({"tipo": o["tipo"], "objeto": o["objeto"],
-                    "confidence": o["conf"], "risk": "ALTO",
-                    "bbox": o["bbox"], "ref": "RQF02 (1)"})
+                    "confidence": o["conf"],
+                    "risk": "ALTO" if es_riesgo else "CONTEXTO",
+                    "bbox": o["bbox"],
+                    "ref": "RQF02 (1)" if es_riesgo else "escena"})
 
     for s in result.get("postura", []):
         col = RISK_COLOR.get(s["riesgo"], (220, 220, 220))
