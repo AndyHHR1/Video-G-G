@@ -383,14 +383,21 @@ def api_frame():
     # por frame, que era el cuello de botella: la inferencia son 16 ms pero el
     # ciclo completo llegaba a 45 ms.
     h, w = image.shape[:2]
-    return jsonify({
-        "detections": [
-            {**d, "bbox": [
+    # Solo las detecciones con caja se normalizan a 0..1. Las señales de
+    # postura (`sin_pasamanos`, `distraccion`, `tambaleo`) NO tienen caja: son
+    # condiciones descritas con keypoints, no objetos que se puedan encerrar,
+    # y asumirlas todas revienta con KeyError en cuanto aparece una.
+    norm = []
+    for d in dets:
+        if "bbox" in d:
+            norm.append({**d, "bbox": [
                 round(d["bbox"][0] / w, 4), round(d["bbox"][1] / h, 4),
                 round(d["bbox"][2] / w, 4), round(d["bbox"][3] / h, 4),
-            ]}
-            for d in dets
-        ],
+            ]})
+        else:
+            norm.append(d)
+    return jsonify({
+        "detections": norm,
         "summary": summarise(dets),
         "riesgo": result["riesgo"],
         "postura": result["postura"],

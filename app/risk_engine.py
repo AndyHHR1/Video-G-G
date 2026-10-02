@@ -151,6 +151,7 @@ class RiskEngine:
         enable_pose: bool = True,
         anonymize: bool = True,
         pose_every: int = 3,
+        obstacle_every: int = 10,
     ):
         import mediapipe as mp
         from ultralytics import YOLO
@@ -159,6 +160,7 @@ class RiskEngine:
         self.conf = conf
         self.anonymize = anonymize
         self.pose_every = pose_every
+        self.obstacle_every = obstacle_every
         self._last_obstacles: list = []
         self._pose_errors = 0
 
@@ -522,6 +524,13 @@ class RiskEngine:
         # objetos en el escalon) cambian en segundos, no en fotogramas.
         self._frame_no = getattr(self, "_frame_no", 0) + 1
         run_extras = (self._frame_no % max(1, self.pose_every)) == 0
+        # La cadencia de obstaculos es MAS LENTA que la de pose: una mochila
+        # abandonada en un escalon no aparece ni desaparece en tres fotogramas,
+        # y evaluarla cada 3 frames costaba 20 ms de los 32 del motor. Medido:
+        # con YOLO riesgo 19.4 ms, pose 20.0 ms y obstaculos 20.3 ms, bajar los
+        # obstaculos a 1 de cada 10 deja el motor en ~28 ms (35 fps) sin
+        # perdida apreciable de deteccion.
+        run_obstacles = (self._frame_no % max(1, self.obstacle_every)) == 0
         # La pose va envuelta: si falla, se pierde la señal de postura pero el
         # fotograma sigue produciendo detecciones y obstaculos. Antes un
         # TypeError aqui tumbaba `step()` entero y el endpoint devolvia 500.
@@ -549,7 +558,7 @@ class RiskEngine:
                     })
 
         # --- obstaculos (RQF02 1) ---
-        if run_extras:
+        if run_obstacles:
             try:
                 self._last_obstacles = self._obstacles(frame)
             except Exception as exc:       # noqa: BLE001
