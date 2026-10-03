@@ -1100,3 +1100,39 @@ Las detecciones de mobiliario siguen sin `class_name` (usan `objeto`): es el
 comportamiento de siempre y el frontend ya cae a ese campo.
 
 Las tres rutas de análisis y las cinco de consulta responden 200.
+
+---
+
+# PARTE 18 — Botón de descarga en las tres pestañas y borrado de alertas
+
+Añadido **sin tocar nada de lo que ya funcionaba**.
+
+## Botón "Descargar todo (ZIP)"
+
+Estaba solo en la pestaña de imagen. Ahora en **las tres**, junto al panel de
+alertas, junto con los botones de borrado.
+
+## Borrado de alertas
+
+Tres formas, como se pidió:
+
+| Acción | Cómo |
+|---|---|
+| **Una por una** | botón `×` en cada alerta |
+| **Seleccionadas** | marcar las casillas → "Borrar seleccionadas" |
+| **Todas** | "Borrar todas", con confirmación explícita |
+
+Nuevo `DELETE /api/alertas`:
+
+- sin cuerpo → borra **todas** (carpeta `runs/alerts/` y el registro)
+- con `{"ids": [...]}` → borra **solo** esas
+
+En ambos casos se borra **la imagen y su línea del registro**, para que no
+queden alertas apuntando a ficheros que ya no existen. Las carpetas de fecha que
+se quedan vacías se limpian.
+
+Verificado: 2 alertas generadas → borrar una deja 1 alerta y 1 imagen →
+borrar todas deja 0 y 0. Con el registro vacío, `/api/alertas.zip` devuelve
+**404 con un mensaje claro** en vez de un ZIP vacío.
+
+Las 5 rutas de consulta y las 2 de análisis siguen respondiendo 200.

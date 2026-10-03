@@ -58,6 +58,19 @@
   .alert-item img:hover { border-color:var(--accent); }
   .alert-desc { font-size:11.5px; color:#aab; margin-top:2px; }
   .alert-alto { border-left:3px solid var(--alto); }
+  .alert-bar { display:flex; gap:6px; flex-wrap:wrap; margin-top:10px; }
+  .abtn { background:#232838; color:#e6e9ef; border:1px solid var(--line);
+          border-radius:6px; padding:6px 10px; font-size:12px; cursor:pointer;
+          text-decoration:none; }
+  .abtn:hover { border-color:var(--accent); }
+  .abtn.ghost { background:transparent; }
+  .abtn.danger { border-color:#5c2b2b; color:#e88; }
+  .abtn.danger:hover { background:#3a1c1c; border-color:var(--alto); }
+  .abtn[disabled] { opacity:.4; cursor:default; }
+  .alert-sel { align-self:flex-start; margin-top:2px; }
+  .alert-x { margin-left:auto; align-self:flex-start; background:none;
+             border:0; color:#666; cursor:pointer; font-size:15px; padding:0 3px; }
+  .alert-x:hover { color:var(--alto); }
   .alert-medio { border-left:3px solid var(--medio); }
   .alert-meta { font-size:11.5px; color:var(--muted); line-height:1.45; }
   .alert-tipo { font-size:13px; font-weight:560; }
@@ -119,6 +132,12 @@
         <div class="card" style="margin-bottom:16px">
           <h2>Alertas · RQF08</h2>
           <div class="alert-box" id="alertbox1"><div class="req">Sin alertas.</div></div>
+<div class="alert-bar">
+              <a id="zip1" href="/api/alertas.zip" download="alertas.zip"
+                 class="abtn">Descargar todo (ZIP)</a>
+              <button id="borrarSel1" class="abtn ghost">Borrar seleccionadas</button>
+              <button id="borrarTodo1" class="abtn danger">Borrar todas</button>
+            </div>
           <a id="zipbtn" href="/api/alertas.zip" download="alertas.zip"
              style="display:none;margin-top:10px;background:#4c8dff;color:#fff;
                     border-radius:7px;padding:8px 14px;font-size:13px;text-decoration:none;
@@ -151,6 +170,12 @@
         <div class="card" style="margin-bottom:16px">
           <h2>Alertas · RQF08</h2>
           <div class="alert-box" id="alertbox2"><div class="req">Sin alertas.</div></div>
+<div class="alert-bar">
+              <a id="zip2" href="/api/alertas.zip" download="alertas.zip"
+                 class="abtn">Descargar todo (ZIP)</a>
+              <button id="borrarSel2" class="abtn ghost">Borrar seleccionadas</button>
+              <button id="borrarTodo2" class="abtn danger">Borrar todas</button>
+            </div>
         </div>
         <div class="card">
           <h2>Procesado local</h2>
@@ -195,6 +220,12 @@
         <div class="card" style="margin-bottom:16px">
           <h2>Alertas · RQF08</h2>
           <div class="alert-box" id="alertbox3"><div class="req">Sin alertas.</div></div>
+<div class="alert-bar">
+              <a id="zip3" href="/api/alertas.zip" download="alertas.zip"
+                 class="abtn">Descargar todo (ZIP)</a>
+              <button id="borrarSel3" class="abtn ghost">Borrar seleccionadas</button>
+              <button id="borrarTodo3" class="abtn danger">Borrar todas</button>
+            </div>
         </div>
         <div class="card" style="margin-top:16px">
           <h2>Cómo usar esta prueba</h2>
@@ -680,11 +711,12 @@ async function cargarAlertas() {
   catch (e) { return; }
   const lista = d.alertas || [];
   const html = lista.length ? lista.map(a => `
-    <div class="alert-item ${a.severity==='ALTO'?'alert-alto':'alert-medio'}">
+    <div class="alert-item ${a.severity==='ALTO'?'alert-alto':'alert-medio'}" data-id="${a.alert_id}">
+      <input type="checkbox" class="alert-sel" value="${a.alert_id}" title="Seleccionar">
       ${a.imagen ? `<a href="${a.imagen}" download title="Descargar">
           <img src="${a.imagen}" alt=""></a>`
-                 : '<div style="width:64px;height:44px;background:#0d0f14;border-radius:5px"></div>'}
-      <div style="min-width:0">
+         : '<div style="width:96px;height:66px;background:#0d0f14;border-radius:5px"></div>'}
+      <div style="min-width:0;flex:1">
         <div class="alert-tipo">${(a.risk_type||'').replace(/_/g,' ')}
           <span class="badge">${SEV_TXT[a.severity]||a.severity}</span></div>
         <div class="alert-meta">${(a.timestamp||'').replace('T',' ')} · ${a.duration_s}s ·
@@ -692,13 +724,21 @@ async function cargarAlertas() {
         <div class="alert-meta">${a.risk_ref||''}</div>
         ${a.description ? `<div class="alert-desc">${a.description}</div>` : ''}
       </div>
+      <button class="alert-x" data-del="${a.alert_id}" title="Borrar esta alerta">×</button>
     </div>`).join('') : '<div class="req">Sin alertas registradas.</div>';
   for (const id of ['alertbox1','alertbox2','alertbox3']) {
     const el = document.getElementById(id);
     if (el) el.innerHTML = html;
   }
-  const zb = document.getElementById('zipbtn');
-  if (zb) zb.style.display = d.total ? 'inline-block' : 'none';
+  const hay = (d.total || 0) > 0;
+  for (const n of [1,2,3]) {
+    const z = document.getElementById('zip' + n);
+    const b1 = document.getElementById('borrarSel' + n);
+    const b2 = document.getElementById('borrarTodo' + n);
+    if (z) z.style.display = hay ? 'inline-block' : 'none';
+    if (b1) b1.disabled = !hay;
+    if (b2) b2.disabled = !hay;
+  }
 }
 async function refrescarEstado() {
   try {
@@ -710,6 +750,42 @@ document.addEventListener('DOMContentLoaded', () => {
   cargarAlertas(); refrescarEstado();
   setInterval(() => { cargarAlertas(); refrescarEstado(); }, 3000);
 });
+
+  // --- borrar alertas: individual, seleccionadas o todas ---
+  const idsSeleccionados = () =>
+    [...document.querySelectorAll('.alert-sel:checked')].map(c => c.value);
+
+  async function borrar(ids, que) {
+    if (!confirm('¿' + que + '?')) return;
+    try {
+      const r = await fetch('/api/alertas', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(ids ? { ids } : {})
+      });
+      if (!r.ok) { alert('No se pudo borrar: ' + r.status); return; }
+      await cargarAlertas();
+    } catch (e) { alert('Error: ' + e.message); }
+  }
+
+  // un solo manejador para los tres paneles
+  document.addEventListener('click', (ev) => {
+    const del = ev.target.closest('[data-del]');
+    if (del) { ev.stopPropagation(); borrar([del.dataset.del], 'Borrar esta alerta'); return; }
+    const sel = ev.target.closest('#borrarSel1,#borrarSel2,#borrarSel3');
+    if (sel) { const ids = idsSeleccionados();
+      if (!ids.length) { alert('No hay ninguna seleccionada. Marca las casillas.'); return; }
+      borrar(ids, 'Borrar ' + ids.length + ' alerta(s)'); return; }
+    const all = ev.target.closest('#borrarTodo1,#borrarTodo2,#borrarTodo3');
+    if (all) { borrar(null, 'Borrar TODAS las alertas y sus imagenes. No se puede deshacer'); }
+  });
+
+  // deseleccionar al recargar
+  for (const id of ['alertbox1','alertbox2','alertbox3']) {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('change', () => { /* mantiene el estado */ });
+  }
+
 
 function camFail(msg) {
   $('#scam').innerHTML = `<div class="placeholder" style="max-width:520px">${msg}</div>`;

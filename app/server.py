@@ -25,6 +25,7 @@ import json
 import io
 import os
 import queue
+import shutil
 import sys
 import tempfile
 import threading
@@ -616,6 +617,71 @@ def api_alerts():
             lineas.append(a)
     lineas.reverse()
     return jsonify({"alertas": lineas[:100], "total": len(lineas)})
+
+
+def _alertes() -> list[dict]:
+    """Lee el registro de alertas (reutilizado por las rutas de borrado)."""
+    d = RiskEngine.ALERT_DIR
+    jl = d / "alertas.jsonl"
+    if not jl.is_file():
+        return []
+    out = []
+    for ln in jl.read_text(encoding="utf-8", errors="replace").splitlines():
+        ln = ln.strip()
+        if not ln:
+            continue
+        try:
+            out.append(json.loads(ln))
+        except Exception:
+            continue
+    return out
+
+
+@app.delete("/api/alertas")
+def api_borrar_alertas():
+    """Borra alertas.
+
+    Sin cuerpo borra TODAS; con `{"ids": [...]}` borra solo las elegidas.
+    Se eliminan tanto la imagen de evidencia como su linea del registro, para
+    que no queden alertas apuntando a ficheros que ya no existen.
+    """
+    d = RiskEngine.ALERT_DIR
+    cuerpo = request.get_json(silent=True) or {}
+    ids = cuerpo.get("ids") or request.args.getlist("id") or None
+
+    if not ids:
+        # borrar todo
+        if d.is_dir():
+            shutil.rmtree(d, ignore_errors=True)
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "alertas.jsonl").touch()
+        return jsonify({"borradas": "todas", "total": 0})
+
+    borradas = 0
+    conservadas = []
+    for a in _alertes():
+        if a.get("alert_id") not in ids:
+            conservadas.append(a)
+            continue
+        ev = a.get("evidence") or ""
+        try:
+            destino = Path(ev).resolve()
+            if str(destino).startswith(str(d.resolve()) + "/") and destino.is_file():
+                destino.unlink()
+        except Exception:
+            pass          # la imagen ya no estaba: se ignora
+        borradas += 1
+    with (d / "alertas.jsonl").open("w", encoding="utf-8") as fh:
+        for a in conservadas:
+            fh.write(json.dumps(a, ensure_ascii=False) + "\n")
+    # limpia carpetas de fecha que se hayan quedado vacias
+    for sub in d.iterdir() if d.is_dir() else []:
+        if sub.is_dir() and not any(sub.iterdir()):
+            try:
+                sub.rmdir()
+            except OSError:
+                pass
+    return jsonify({"borradas": borradas, "total": len(conservadas)})
 
 
 @app.get("/api/alerta-imagen/<dia>/<nombre>")
