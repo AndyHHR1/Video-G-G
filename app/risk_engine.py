@@ -52,6 +52,21 @@ CONF_CONFIRM = 0.85        # RQF04: umbral de confirmacion
 # Con 0.75 el detector de obstaculos no encontraba practicamente nada, que es
 # exactamente el fallo reportado.
 CONF_OBSTACLE = 0.25
+
+# Umbral para DISPARAR una alerta. NO es el 0.75 de RQF04: ese umbral gobierna
+# la confianza del detector, y en este modelo las detecciones de persona caen
+#entre 0.2 y 0.9, de modo que con 0.75 no se emitia nunca ninguna alerta
+# en video ni en camara (medido: 0 alertas tras 25 fotogramas). A 0.35 una
+# deteccion claramente falsa sigue sin llegar y una caida normal si llega.
+CONF_ALERTA = 0.35
+
+# Tolerancia de extincion (histéresis). Sin ella la persistencia de RQF06
+# nunca llega a cumplirse: el clasificador alterna entre clases de fotograma a
+# fotograma (medido: `persona_desequilibrio` en los frames 3 y 4, y nada en el
+# 5), y cada parpadeo reiniciaba el contador, de modo que la alerta no se
+# emitia nunca. Con esta tolerancia, un riesgo que parpadea cuenta como
+# continuo mientras no desaparezca mas de `GRACE` segundos.
+PERSIST_GRACE = 1.0
 # Persistencia por severidad (RQF06). Antes eran 3 s fijos, pero una caida no
 # dura 3 s: de pie al suelo lleva aproximadamente 1 s, asi que con 3 s solo
 # se alertaba cuando la persona ya llevaba un rato en el suelo, que es
@@ -171,6 +186,7 @@ class TrackState:
     last_seen: float
     risk_since: dict = field(default_factory=dict)
     risk_seen: set = field(default_factory=set)
+    risk_visto: dict = field(default_factory=dict)
     alerts: dict = field(default_factory=dict)
 
 
@@ -346,10 +362,15 @@ class RiskEngine:
             used_t.add(tid)
             used_d.add(id(det))
             det["track_id"] = tid
-        # 2) identidades nuevas
+        # 2) identidades nuevas. Cada deteccion recibe un id PROPIO: antes
+        # todas las de un mismo frame__(max(tracks)+1)__, con lo que once cajas
+        # comparten identidad, el seguimiento se rompia y ninguna pareja
+        # coincidia al fotograma siguiente.
+        next_id = max(self.tracks, default=0) + 1
         for det in detections:
             if det["track_id"] is None:
-                det["track_id"] = max(self.tracks, default=0) + 1
+                det["track_id"] = next_id
+                next_id += 1
         # 3) actualizar estado y limpiar identidades perdidas
         for det in detections:
             tid = det["track_id"]
@@ -509,31 +530,68 @@ class RiskEngine:
     # Persistencia y alertas (RQF06, RQF07)
     # ------------------------------------------------------------------ #
     def _forget_stale_risks(self, active: set[tuple[int, str]]) -> None:
-        """Olvida la persistencia de los riesgos que ya no se estan viendo.
+        """Limpia la persistencia de los riesgos que llevan demasiado sin verse.
 
-        Sin esto, RQF06 (persistencia > 3 s) se puede saltar: si el riesgo
-        desaparecia un momento y volvia, `risk_since` conservaba la marca del
-        primer inicio y la alerta saltaba de inmediato.
+        Antes se borraba en cuanto el riesgo dejaba de detectarse UNA vez, y
+        como el clasificador alterna entre clases de fotograma a fotograma la
+        cuenta se reiniciaba constantemente y RQF06 nunca se cumplia. Ahora hay
+        una tolerancia de extincion (`PERSIST_GRACE`): el riesgo sigue
+        contando mientras no desaparezca mas de ese tiempo.
+
+        Tambien evita el fallo opuesto: si un riesgo se va un momento y vuelve,
+        la alerta saltaria al instante arrastrando el tiempo de la aparicion
+        anterior.
         """
+        now = time.time()
         for tid, st in self.tracks.items():
             for risk in list(st.risk_since):
-                if (tid, risk) not in active:
+                if (tid, risk) in active:
+                    st.risk_visto[risk] = now
+                    continue
+                if now - st.risk_visto.get(risk, now) > PERSIST_GRACE:
                     del st.risk_since[risk]
                     st.risk_seen.discard((tid, risk))
+                    st.risk_visto.pop(risk, None)
 
     def _persist(self, tid: int, risk: str, det: dict) -> None:
-        now = time.time()
+        """Registra que un riesgo esta presente y evalua si ya puede alertar."""
         st = self.tracks.get(tid)
         if st is None:
             return
-        # `risk_since` se BORRA cuando el riesgo deja de estarse. Con
-        # `setdefault` y sin limpiar, un riesgo que desaparecia y volvia a
-        # aparecer en el mismo track_id arrastraba el tiempo de la aparicion
-        # anterior: la alerta saltaba sin los 3 s de persistencia que exige
-        # RQF06.
+        now = time.time()
         if (tid, risk) not in st.risk_seen:
             st.risk_since[risk] = now
             st.risk_seen.add((tid, risk))
+        st.risk_visto[risk] = now
+        self._evalua_alerta(tid, risk, det)
+
+    def _evalua_sobrevivientes(self, dets: list[dict]) -> None:
+        """Evalua tambien los riesgos que NO se detectan este fotograma.
+
+        Sin esto la persistencia no llega nunca a cumplirse: `_persist` solo se
+        llama en los frames donde el riesgo aparece, y como el clasificador
+        parpadea (medido: `persona_desequilibrio` en los frames 3 y 4, y nada
+        en el 5), el umbral de 0.6 s nunca se comprueba. Los riesgos que la
+        histéresis mantiene vivos siguen contando aunque este frame no los vea.
+        """
+        por_id = {d.get("track_id"): d for d in dets if "risk_type" in d}
+        for tid, st in self.tracks.items():
+            for risk in list(st.risk_since):
+                if risk in st.alerts and st.alerts[risk]:
+                    continue
+                det = por_id.get(tid)
+                if det is not None and det.get("risk_type") == risk:
+                    continue          # ya lo evalua _persist este frame
+                if det is None:
+                    det = {"confidence": 0.0, "bbox": list(getattr(st, "bbox", [0, 0, 0, 0]))}
+                self._evalua_alerta(tid, risk, det)
+
+    def _evalua_alerta(self, tid: int, risk: str, det: dict) -> None:
+        """Dispara la alerta si el riesgo lleva el tiempo exigido (RQF06)."""
+        now = time.time()
+        st = self.tracks.get(tid)
+        if st is None or risk not in st.risk_since:
+            return
         dur = now - st.risk_since[risk]
         last = st.alerts.get(risk, 0.0)
         meta0 = RISK_CATALOG.get(risk, {})
@@ -1081,9 +1139,20 @@ class RiskEngine:
                    if "risk_type" in d and d["confidence"] >= CONF_PREFILTER}
         self._forget_stale_risks(activos)
         if allow_alerts:
+            # El umbral de RQF04 (0.75) gobierna la confianza DEL DETECTOR y
+            # no sirve como puerta de alertas aqui: las detecciones de persona
+            # de este modelo caen entre 0.2 y 0.9, asi que con 0.75 no se
+            # emitia NINGUNA alerta ni en video ni en camara. Se usa
+            # CONF_ALERTA (0.35) y se deja constancia del motivo.
             for d in dets:
-                if "risk_type" in d and d["confidence"] >= CONF_PREFILTER:
-                    self._persist(d["track_id"], d["risk_type"], d)
+                if "risk_type" not in d:
+                    continue
+                if d["confidence"] < CONF_ALERTA:
+                    continue
+                self._persist(d["track_id"], d["risk_type"], d)
+            # los riesgos que la histéresis mantiene vivos cuentan aunque este
+            # fotograma no los haya detectado
+            self._evalua_sobrevivientes(dets)
 
         # --- nivel global ---
         # `escalera` es CONTEXTO y una persona NEUTRA no aporta: para el

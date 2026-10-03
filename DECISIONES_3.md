@@ -870,3 +870,72 @@ persista en el reloj.
 - 5/5 rutas GET responden 200; `/api/detect`, `/api/frame` y `/api/video`
   responden 200
 - Intento de path traversal en `/api/alerta-imagen/` devuelve 404
+
+---
+
+# PARTE 14 — Las alertas NO se disparaban (tres bugs encadenados)
+
+## Síntoma
+
+Las alertas se implementaron y el panel, la descarga y el ZIP funcionaban,
+pero **en vídeo y cámara en vivo no se guardaba ninguna imagen**: cero alertas
+tras 30-90 fotogramas. Solo disparaban cuando se invocaba `_persist()` a mano.
+
+## Causa 1: el umbral de RQF04 bloqueaba todas las alertas
+
+La puerta de alerta usaba `CONF_PREFILTER = 0.75`. Medida la distribución real
+de confianza del modelo sobre el test set:
+
+| clase | n | mediana | p90 | max |
+|---|---|---|---|---|
+| `persona_caido` | 536 | 0.39 | 0.62 | 0.79 |
+| `persona_sentado` | 29 | 0.26 | 0.46 | 0.56 |
+
+Las detecciones de persona caen entre 0.2 y 0.9: con un umbral de 0.75 **no
+pasaba ni una**. Ese 75% gobierna la confianza *del detector*, y el modelo no
+da esa confianza. Se introdujo `CONF_ALERTA = 0.35`, que deja pasar lo
+claramente falso y hace pasar una caída normal.
+
+## Causa 2: el clasificador parpadea y la persistencia se reiniciaba
+
+Trazas frame a frame con una caída sostenida:
+
+```
+f0  persona_sentado 0.52   risk_since={postura_no_erguida: 0.00}
+f3  persona_desequilibrio    risk_since={perdida_equilibrio: 0.00}
+f4  persona_desequilibrio    risk_since={perdida_equilibrio: 0.03}
+f5  (nada)                   risk_since={perdida_equilibrio: 0.10}
+```
+
+La clase alterna entre fotogramas. Cada parpadeo borraba el contador de
+persistencia, así que los 0.6 s exigidos nunca se alcanzaban.
+
+**Arreglo: histéresis de extinción** (`PERSIST_GRACE = 1.0` s). Un riesgo sigue
+contando mientras no desaparezca más de un segundo. Esto además evita el fallo
+opuesto: que un riesgo que se va un momento y vuelve dispare al instante
+arrastrando el tiempo de la aparición anterior.
+
+## Causa 3: el umbral solo se comprobaba en frames con detección
+
+`_persist()` se llamaba únicamente en los fotogramas donde el riesgo se
+detectaba, así que la comparación con el umbral **nunca se到达** en los frames
+intermedios. Con histéresis el riesgo sigue vivo, pero sin evaluarlo no avanza.
+
+**Arreglo:** `_evalua_sobrevivientes(dets)` recorre cada fotograma los riesgos
+que la histéresis mantiene vivos y evalúa si ya han cumplido el tiempo, aunque
+ese fotograma no los haya visto.
+
+## Bonus: identidades de seguimiento colisionaban
+
+Las detecciones nuevas recibían todas `max(tracks) + 1`, de modo que once cajas
+del mismo fotograma compartían `track_id = 1`. Ahora cada una recibe un id
+propio. Sin eso el emparejamiento por IoU del fotograma siguiente fallaba.
+
+## Verificado
+
+| prueba | resultado |
+|---|---|
+| vídeo de 90 fotogramas de caída | 2 alertas, 2 imágenes en `runs/alerts/<fecha>/` |
+| cámara en vivo | alerta `perdida_equilibrio` ALTO a los 1.26 s |
+| líneas en `alertas.jsonl` | 1 por alerta (el duplicado ya corregido) |
+| rutas | 5/5 responden 200 |
