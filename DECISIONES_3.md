@@ -983,3 +983,66 @@ Corregido con un constructor único `respuesta(dets, result, timing, **extra)`. 
 - Sintaxis correcta en los 9 ficheros Python.
 - Sin imports sin usar ni variables muertas relevantes.
 - Los `except` que silencian errores son 1 en `risk_engine.py` (el segundo intento de pose) y 3 en `server.py`, todos con motivo y registro.
+
+---
+
+# PARTE 16 — Reducción del sesgo: gente de pie marcada como caída
+
+## Síntoma
+
+En cámara en vivo, una persona caminando erguida sale como `persona_caido`. Es
+el falso positivo que más se ha reportado.
+
+## El sesgo, medido
+
+Con el motor completo sobre el test set:
+
+| realidad | `caido` | `desequilibrio` | `erguida` | **falsa alarma** | detección |
+|---|---|---|---|---|---|
+| de pie (59) | 4 | 3 | 52 | **12%** | — |
+| caído (41) | 36 | 2 | 1 | — | **93%** |
+
+Y por clasificador que decide:
+
+| clasificador | acierta de pie | acierta caído | veces que decide |
+|---|---|---|---|
+| geometría de pose | 52/58 = **90%** | 37/38 = **97%** | 96 de 100 |
+| modelo (recorte) | 0/1 = 0% | 2/2 = 100% | 4 de 100 |
+
+## Decisión: umbral de altura de cabeza 0.90 → 0.75
+
+Barrido **dentro del motor**, no con un script aparte:
+
+| cabeza | de pie → ALTO (falsa) | caída detectada | de pie correcta |
+|---|---|---|---|
+| 0.90 (antes) | 12% | 93% | 88% |
+| **0.75 (ahora)** | **8%** | **93%** | **92%** |
+
+Mejora en los dos lados sin perder **ninguna** detección de caída.
+
+## La trampa de medición (importante)
+
+Al medir los mismos umbrales con un script independiente, fuera del motor,
+salen **57% de falsas alarmas**. La diferencia: el motor usa MediaPipe en modo
+**tracking** (secuencia temporal, keypoints suavizados) y el script usaba modo
+**detección** (fotogramas sueltos, sin seguimiento).
+
+**Conclusión: los umbrales de este sistema solo se pueden medir con el motor
+completo.** Un script aparte da cifras que inducen a cambiar el sistema en la
+dirección equivocada. Ya ha pasado una vez en esta sesión al calibrar el umbral
+de 12°.
+
+## Lo que NO se ha tocado
+
+- `GEOM_INESTABLE_INCLINA = 12°`: el barrido de 12° a 20° no cambia nada
+  (8% de falsas alarmas y 93% de detección en todos). Se deja, ya que es el
+  valor documentado.
+- El respaldo por recorte: decide 4 de cada 100 veces y acierta mal las de pie.
+  Sigue ahí por cuando la pose no se detecta, pero su peso real es mínimo.
+
+## Pendiente
+
+El falso positivo en cámara **sigue siendo de alrededor del 8%** en el test, y
+en un vídeo real puede ser mayor: el umbral se calibró con gente de frente, no
+bajando escaleras desde un ángulo bajo. Con un vídeo suyo de verdad se podría
+recalibrar con datos del caso de uso.

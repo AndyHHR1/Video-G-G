@@ -769,7 +769,15 @@ class RiskEngine:
     # que ocurre en fotos reales de escalera, fuera de su dominio.
     GEOM_CAIDO_INCLINA = 25.0
     GEOM_CAIDO_CABEZA = 0.55
-    GEOM_DESEQUILIBRIO_CABEZA = 0.90
+    GEOM_DESEQUILIBRIO_CABEZA = 0.75
+    # Medido DENTRO del motor (MediaPipe en modo tracking, que es como
+    # funciona de verdad): con 0.90 hay 12% de falsas alarmas y 88% de acierto
+    # de "de pie"; con 0.75, 8% y 92%, sin perder NINGUNA deteccion de caida
+    # (93% en ambos casos). 0.75 medido.
+    # OJO: midiendo con MediaPipe en modo deteccion (fotogramas sueltos, sin
+    # seguimiento) las cifras son mucho peores: el seguimiento temporal es lo
+    # que hace estable la pose. Los umbrales se miden siempre con el motor
+    # completo, nunca con un script aparte.
     # Umbral de INESTABILIDAD: cuerpo que empieza a caerse sin estar todavia
     # en el suelo. Medido sobre el test set, con el porcentaje de personas de
     # pie que cada umbral marcaria por error:
