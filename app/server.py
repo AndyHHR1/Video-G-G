@@ -210,6 +210,7 @@ class Inferencer:
             self._conf = conf
             self._engine.conf = conf
         t0 = time.perf_counter()
+        self._engine._camara_connected = True
         result = self._engine.step(image, force=force,
                                    allow_alerts=allow_alerts)
         t_predict = (time.perf_counter() - t0) * 1000
@@ -366,6 +367,30 @@ def encode_jpeg(image: np.ndarray, quality: int = 82) -> bytes:
 # --------------------------------------------------------------------------- #
 # Resumen de riesgo
 # --------------------------------------------------------------------------- #
+def respuesta(dets, result, timing, **extra) -> "Response":
+    """Construye la respuesta de TODAS las rutas de analisis en un solo sitio.
+
+    Antes el mismo JSON de 10 claves estaba escrito en tres rutas (`/api/detect`,
+    `/api/frame` con y sin overlay) y fue el origen de una divergencia real: el
+    movil salia como CONTEXTO en una y como MEDIO en otra, porque cada copia
+    calculaba el riesgo a su manera. Con un unico constructor no puede volver a
+    pasar.
+    """
+    cuerpo = {
+        "detections": dets,
+        "summary": summarise(dets),
+        "riesgo": result["riesgo"],
+        "postura": result["postura"],
+        "obstaculos": result["obstaculos"],
+        "alertas": result["alertas"],
+        "tracks": result["tracks"],
+        "sistema": result["sistema"],
+        "timing": timing,
+    }
+    cuerpo.update(extra)
+    return jsonify(cuerpo)
+
+
 def summarise(detections: list[dict]) -> dict:
     """Traduce las detecciones a un veredicto de riesgo segun `Caso.md`."""
     # `detections` mezcla cajas de YOLO (con `class_name`), obstaculos y
@@ -432,20 +457,10 @@ def api_detect():
     timing["encode"] = round((time.perf_counter() - t_enc) * 1000, 1)
     timing["total"] = round(t_all, 1)
 
-    return jsonify({
-        "detections": dets,
-        "summary": summarise(dets),
-        "riesgo": result["riesgo"],
-        "postura": result["postura"],
-        "obstaculos": result["obstaculos"],
-        "alertas": result["alertas"],
-        "tracks": result["tracks"],
-        "sistema": result["sistema"],
-        "inference_ms": timing["predict"],
-        "timing": timing,
-        "size": [int(image.shape[1]), int(image.shape[0])],
-        "image": payload,
-    })
+    return respuesta(dets, result, timing,
+                     inference_ms=timing["predict"],
+                     size=[int(image.shape[1]), int(image.shape[0])],
+                     image=payload)
 
 
 @app.post("/api/frame")
@@ -501,18 +516,8 @@ def api_frame():
     annotated, result, dets, timing = got
     if overlay:
         annotate_status(annotated, dets, 0.0, result)
-        return jsonify({
-            "detections": dets,
-            "summary": summarise(dets),
-            "riesgo": result["riesgo"],
-            "postura": result["postura"],
-            "obstaculos": result["obstaculos"],
-            "alertas": result["alertas"],
-            "tracks": result["tracks"],
-            "sistema": result["sistema"],
-            "timing": timing,
-            "image": encode_jpeg(annotated, quality=72).hex(),
-        })
+        return respuesta(dets, result, timing,
+                         image=encode_jpeg(annotated, quality=72).hex())
 
     # Modo `overlay=0`: se devuelven SOLO las cajas y el navegador dibuja
     # sobre el frame que ya tiene. Evita codificar y reenviar ~50 KB de JPEG
@@ -884,8 +889,13 @@ def login():
 
 @app.get("/api/health")
 def health():
+    detalle = {}
+    if _inferencer is not None and getattr(_inferencer, "_engine", None):
+        detalle = _inferencer._engine.estado_detallado()
     return jsonify({
         "ok": True,
+        "estado": detalle.get("estado", "DESCONOCIDO"),
+        "detalle": detalle,
         "weights": _settings["weights"],
         "device": "cuda:0" if _cv_cuda() else "cpu",
         "classes": len(CLASS_INFO),

@@ -326,6 +326,14 @@ class RiskEngine:
         # evidencia. No se limpia en `reset()`: si una alerta se ha emitido,
         # su imagen debe escribirse igualmente.
         self._pending: list = []
+        # --- estado operativo (RQNF09, RQNF26) ---
+        # mostraba siempre verde aunque la GPU fallara o se perdiera la camara.
+        # mostraba siempre verde aunque la GPU fallara o la camara se perdiera.
+        self._fallos_gpu = 0
+        self._fallos_pose = 0
+        self._fallos_deteccion = 0
+        self._camara_connected = False
+        self._estado_manual = None
 
         # El seguimiento es IoU handmade (ver `_track`), no ByteTrack: se
         # descarto porque arrastra estado interno entre llamadas de forma
@@ -856,6 +864,48 @@ class RiskEngine:
         self._last_tambaleo = False
         self._last_pose_landmarks = None
 
+    def _estado_operativo(self) -> str:
+        """Estado real del sistema (RQNF09 auto-descriptividad, RQNF26).
+
+        Devuelve OPERATIVO, DEGRADADO o NO OPERATIVO segun lo que este
+        pasando de verdad, no un literal fijo.
+        """
+        if self._estado_manual:
+            return self._estado_manual
+        if self.det is None or self.obs is None:
+            return "NO OPERATIVO"
+        fallos = self._fallos_gpu + self._fallos_pose + self._fallos_deteccion
+        if not self._camara_connected:
+            # sin camara el motor funciona pero no hay senal que analizar
+            return "DEGRADADO"
+        if fallos > 0:
+            return "DEGRADADO"
+        return "OPERATIVO"
+
+    def estado_detallado(self) -> dict:
+        """Detalle del estado para el panel y para diagnostico (RQNF23)."""
+        return {
+            "estado": self._estado_operativo(),
+            "fallos_gpu": self._fallos_gpu,
+            "fallos_pose": self._fallos_pose,
+            "fallos_deteccion": self._fallos_deteccion,
+            "camara": self._camara_connected,
+            "tracks": len(self.tracks),
+            "alertas_emitidas": len(self.alerts),
+        }
+
+    def _marca_fallo(self, que: str) -> None:
+        """Suma un fallo y program forgetting: un fallo aislado no degrada."""
+        attr = {"gpu": "_fallos_gpu", "pose": "_fallos_pose",
+                "deteccion": "_fallos_deteccion"}.get(que)
+        if not attr:
+            return
+        setattr(self, attr, getattr(self, attr) + 1)
+
+    def olvida_fallos(self) -> None:
+        """Se llama cuando un fotograma se procesa bien: los fallos son recientes."""
+        self._fallos_gpu = self._fallos_pose = self._fallos_deteccion = 0
+
     def _find_people(self, frame: np.ndarray) -> list[list[int]]:
         """Detecta personas con el modelo COCO de 80 clases.
 
@@ -982,6 +1032,7 @@ class RiskEngine:
                 pose = self._analyse_pose(frame)
             except Exception as exc:       # noqa: BLE001
                 self._pose_errors += 1
+                self._marca_fallo("pose")
                 if self._pose_errors <= 3:
                     print(f"  [aviso] analisis de pose fallo: "
                           f"{type(exc).__name__}: {exc}", flush=True)
@@ -1005,6 +1056,7 @@ class RiskEngine:
                 self._last_obstacles = self._obstacles(frame)
             except Exception as exc:       # noqa: BLE001
                 self._obstacle_errors += 1
+                self._marca_fallo("deteccion")
                 if self._obstacle_errors <= 3:
                     print(f"  [aviso] deteccion de obstaculos fallo: "
                           f"{type(exc).__name__}: {exc}", flush=True)
@@ -1166,6 +1218,10 @@ class RiskEngine:
         level = max(risks, key=lambda r: {"ALTO": 3, "MEDIO": 2}.get(r, 0),
                                           default="BAJO")
 
+        # Un fotograma procesado con exito olvida los fallos anteriores: el
+        # estado es sobre el momento actual, no acumulativo.
+        self.olvida_fallos()
+
         # --- estado del sistema (RQNF09, RQNF26) ---
         ms = (time.perf_counter() - t0) * 1000
         return {
@@ -1178,7 +1234,7 @@ class RiskEngine:
             "riesgo": level,
             "tracks": len(self.tracks),
             "ms": round(ms, 1),
-            "sistema": "OPERATIVO",
+            "sistema": self._estado_operativo(),
         }
 
 

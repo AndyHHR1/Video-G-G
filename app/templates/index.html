@@ -306,8 +306,10 @@ function riskPanels(d) {
         <td>${a.duration_s}s</td></tr>`).join('') + '</table>'
     : '<div class="req">Ninguna alerta: no hay riesgo persistente más de 3 s (RQF06).</div>';
   h += '</div>';
+  const col = d.sistema === 'OPERATIVO' ? '#3fb85a'
+            : d.sistema === 'DEGRADADO' ? '#f2a83c' : '#e03c3c';
   h += `<div class="card"><h2>Estado del sistema · RQNF09</h2>
-    <div class="stat"><span>Estado</span><b style="color:#3fb85a">${d.sistema}</b></div>
+    <div class="stat"><span>Estado</span><b style="color:${col}">${d.sistema}</b></div>
     <div class="stat"><span>Identidades seguidas</span><b>${d.tracks||0}</b></div>
     <div class="stat"><span>Umbrales</span><b>75% / 85% (RQF04)</b></div>
     <div class="stat"><span>Rostros</span><b>anonimizados (RQNF14)</b></div></div>`;
@@ -458,7 +460,8 @@ function drawBoxes(src, dst, d) {
 // equipo. Se captura con getUserMedia, se pinta en un canvas y cada frame se
 // envia a /api/frame, que lo devuelve ya anotado. Solo hay una peticion en
 // vuelo: encolarlas acumularia retraso y el panel mostraria frames viejos.
-let cam = { on:false, stream:null, busy:false, last:0, sent:0, err:null, ok:false, video:null, fps:0, t0:0 };
+let _estadoGlobal = 'DESCONOCIDO';
+let cam = { on:false, stream:null, busy:false, last:0, sent:0, err:null, ok:false, video:null, fps:0, t0:0, intentos:0 };
 
 function stopCam() {
   cam.on = false;
@@ -484,14 +487,36 @@ $('#bcam').onclick = async () => {
                    'origen seguro. Abre la app en <b>localhost:5000</b> ' +
                    '(no con la URL de tunneling de VS Code) o sírvela por HTTPS.');
   }
-  try {
-    cam.stream = await navigator.mediaDevices.getUserMedia({
-      video: { width:{ideal:1280}, height:{ideal:720} }, audio:false });
-  } catch (e) {
-    const m = {NotAllowedError:'Permiso denegado. Acepta la cámara en el candado de la barra de direcciones.',
-               NotFoundError:'No se ha encontrado ninguna cámara en este equipo.',
-               NotReadableError:'La cámara está siendo usada por otra aplicación.'}[e.name];
-    return camFail(m || ('Error al abrir la cámara: ' + e.name));
+  // RQNF13: reconexion automatica de la senal. Si la camara se cae (USB,
+  // el navegador la libera, el equipo se suspende) se reintenta con espera
+  // creciente en lugar de quedarse muerto hasta que el usuario recargue.
+  cam.intentos = cam.intentos || 0;
+  cam.stream = await conectarCamara();
+  if (!cam.stream) return;   // conectarCamara ya muestra el motivo
+  cam.intentos = 0;
+  cam.stream.getVideoTracks()[0]?.addEventListener('ended', () => {
+    if (cam.on) { setTimeout(() => { if (cam.on) $('\'#bcam\'').click(); }, 3000); }
+  });
+
+  async function conectarCamara() {
+    try {
+      return await navigator.mediaDevices.getUserMedia({
+        video: { width:{ideal:1280}, height:{ideal:720} }, audio:false });
+    } catch (e) {
+      const m = {NotAllowedError:'Permiso denegado. Acepta la cámara en el candado de la barra de direcciones.',
+                 NotFoundError:'No se ha encontrado ninguna cámara en este equipo.',
+                 NotReadableError:'La cámara está siendo usada por otra aplicación.'}[e.name];
+      cam.intentos = (cam.intentos || 0) + 1;
+      if (cam.intentos <= 5 && cam.on) {
+        const espera = Math.min(1000 * cam.intentos, 8000);
+        $('\'#scam\'').innerHTML =
+          `<div class="placeholder">Reintentando conexión con la cámara… (${cam.intentos}/5)</div>`;
+        await new Promise(r => setTimeout(r, espera));
+        if (cam.on) return conectarCamara();
+      }
+      camFail(m || ('Error al abrir la cámara: ' + e.name));
+      return null;
+    }
   }
 
   cam.on = true; cam.last = performance.now(); cam.sent = 0; cam.err = null;
@@ -675,9 +700,15 @@ async function cargarAlertas() {
   const zb = document.getElementById('zipbtn');
   if (zb) zb.style.display = d.total ? 'inline-block' : 'none';
 }
+async function refrescarEstado() {
+  try {
+    const d = await (await fetch('/api/health')).json();
+    _estadoGlobal = d.estado || 'DESCONOCIDO';
+  } catch (e) { _estadoGlobal = 'SIN CONEXION'; }
+}
 document.addEventListener('DOMContentLoaded', () => {
-  cargarAlertas();
-  setInterval(cargarAlertas, 3000);
+  cargarAlertas(); refrescarEstado();
+  setInterval(() => { cargarAlertas(); refrescarEstado(); }, 3000);
 });
 
 function camFail(msg) {

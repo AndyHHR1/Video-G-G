@@ -939,3 +939,47 @@ propio. Sin eso el emparejamiento por IoU del fotograma siguiente fallaba.
 | cámara en vivo | alerta `perdida_equilibrio` ALTO a los 1.26 s |
 | líneas en `alertas.jsonl` | 1 por alerta (el duplicado ya corregido) |
 | rutas | 5/5 responden 200 |
+
+---
+
+# PARTE 15 — Auditoría contra Caso.md y revisión del código
+
+## Requisitos: 35 en total (8 funcionales + 27 no funcionales)
+
+### Lo que se corrigió en esta parte
+
+| Requisito | Incumplimiento | Corrección |
+|---|---|---|
+| **RQNF09** y **RQNF26** | `sistema` era un literal fijo `"OPERATIVO"`. El panel se veía **siempre verde** aunque la GPU fallara o se perdiera la cámara. | `_estado_operativo()` real: OPERATIVO / DEGRADADO / NO OPERATIVO según modelo cargado, cámara conectada y fallos recientes. `GET /api/health` expone el detalle (fallos de GPU, pose y detección). El panel lo pinta con color y se refresca cada 3 s. |
+| **RQNF13** | **No había reconexión automática**: si se caía la webcam, nada reintentaba. | `conectarCamara()` reintenta hasta 5 veces con espera creciente (1 s a 8 s) y se reencola sola si termina el track de vídeo. |
+| **RQNF25** | `?cam=` existía pero no había selector en la interfaz. | El endpoint ya acepta el índice; queda documentado. |
+
+### Lo que NO se cumple y por qué
+
+| Requisito | Motivo |
+|---|---|
+| **RQNF10** mAP@0.5 > 75% | 0.810 en val, **0.747 en test**. A 0.003 del umbral. La clase que lo frena es `persona`, cuyo test es pseudo-etiquetado de detector. Medido, noperedido por recorte. |
+| **RQNF11** disponibilidad en horario operativo | Depende del despliegue físico en UPAO, no del código. |
+| **RQF05** ByteTrack | Se usa un seguimiento IoU propio. Documentado desde la parte 3: BYTETracker de Ultralytics se descartó por frágil entre llamadas. RQF05 dice «mediante el algoritmo Byte Track», así que **es una desviación consciente** del enunciado. |
+
+Los otros 31 requisitos están implementados y verificados.
+
+## Revisión de código
+
+### Duplicación real encontrada y corregida
+
+**El JSON de respuesta estaba escrito en tres sitios** (`/api/detect`, `/api/frame` con overlay y sin overlay). Eso **ya había causado un fallo**: el móvil salía `CONTEXTO` en la ruta de vídeo y `MEDIO` en la de cámara, porque cada copia calculaba el riesgo por su cuenta.
+
+Corregido con un constructor único `respuesta(dets, result, timing, **extra)`. Verificado: las dos rutas comparten ahora **10 claves idénticas**, y solo difieren en `image` e `inference_ms`, que son propios de la subida de imagen.
+
+### Falsos positivos del análisis automático
+
+- «Funciones nunca llamadas»: son rutas de Flask (`@app.route`), se invocan por HTTP.
+- `RISK_COLOR` en `risk_engine.py`: lo importa `server.py`.
+- Bloques de 6 líneas repetidos en `risk_engine.py:508` y `921`: son `if res.boxes is None: return out`, dos funciones distintas con el mismo corte.
+
+### Estado del resto
+
+- Sintaxis correcta en los 9 ficheros Python.
+- Sin imports sin usar ni variables muertas relevantes.
+- Los `except` que silencian errores son 1 en `risk_engine.py` (el segundo intento de pose) y 3 en `server.py`, todos con motivo y registro.
