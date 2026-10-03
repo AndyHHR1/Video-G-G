@@ -38,6 +38,13 @@ weights/
 # a worktrees, que jamas deben versionarse.
 .kilo/
 
+# --- Documento de requisitos ---
+# `Caso.md` es el pliego que aporto el usuario. Se usa como referencia de
+# trabajo pero no se versiona. Este patron vive en un commit propio: las dos
+# veces que se perdio estaba en el mismo commit que borraba el fichero, y la
+# reescritura del historial se lo llevaba por delante.
+Caso.md
+
 # --- Imagenes de prueba del usuario ---
 # El usuario entrego capturas de su escena para diagnosticar. Son imagenes de
 # personas y se pidio expresamente que NO se subieran. Este patron se perdio
