@@ -193,23 +193,56 @@ reenlazar el contexto CUDA, lo que costaba 85 ms por frame frente a 37 ms.
 | RQF01 | Captura continua de vídeo | **CUMPLE** — modo cámara |
 | RQF02 | 4 categorías de riesgo | **CUMPLE** — 3 por pose + 1 por detector COCO |
 | RQF03 | Discriminación seguro / riesgo | **CUMPLE** — veredicto por escena |
-| RQF04 | Umbrales 75 % / 85 % | **CUMPLE** — doble umbral configurable |
-| RQF05 | Seguimiento con oclusión 1 s | **CUMPLE** — identidad estable por IoU |
-| RQF06 | Persistencia > 3 s | **CUMPLE** — medido: alerta a los 3.0 s |
-| RQF07 | Alertas con evidencia | **CUMPLE** — metadatos + fotograma |
+| RQF04 | Umbrales 75 % / 85 % | **PARCIAL** — implementados, pero la puerta de alerta usa 0.35 (ver nota) |
+| RQF05 | Seguimiento con oclusión 1 s | **DESVIACIÓN** — IoU propio en vez de ByteTrack |
+| RQF06 | Persistencia > 3 s | **DESVIACIÓN** — 1.2 s en rojo y 0.6 s en ámbar, por petición del usuario |
+| RQF07 | Alertas con evidencia | **CUMPLE** — metadatos + fotograma anotado con las cajas |
 | RQF08 | Panel de supervisión | **CUMPLE** — app web |
-| RQNF01 | ≥ 30 FPS | **CUMPLE** — motor 37.4 FPS; la cámara usa modo asíncrono (respuesta en 9 ms) |
-| RQNF02 | Latencia < 500 ms | **CUMPLE** — 24 ms por ciclo |
+| RQNF01 | ≥ 30 FPS | **PARCIAL** — motor 37 FPS, cámara en vivo ~20-24 fps |
+| RQNF02 | Latencia < 500 ms | **CUMPLE** — ~41 ms por ciclo en cámara |
 | RQNF03 | VRAM ≥ 6 GB | **CUMPLE** — RTX 5050, 8.1 GB |
 | RQNF10 | mAP@0.5 > 75 % | **PARCIAL** — val 0.810 ✓, test 0.747 |
 | RQNF12 | Resiliencia a iluminación | **CUMPLE** — augmentations HSV reforzadas |
 | RQNF14 | Protección de datos personales | **CUMPLE** — rostros pixelados al guardar |
-| RQNF16 | Registro auditable | **CUMPLE** — `runs/alerts.jsonl` |
+| RQNF16 | Registro auditable | **CUMPLE** — `runs/alerts/alertas.jsonl` |
 | RQNF19 | Autenticación de usuario | **CUMPLE** — `PANEL_TOKEN` |
 | RQNF21 | Configuración sin recompilar | **CUMPLE** — `configs/train.yaml`, flags CLI |
 | RQNF22 | Verificación con vídeos | **CUMPLE** — modo vídeo |
+| RQNF09 | Estado auto-descriptivo | **CUMPLE** — OPERATIVO / DEGRADADO / NO OPERATIVO real |
+| RQNF13 | Reconexión automática de señal | **CUMPLE** — 5 reintentos con espera creciente |
+| RQNF15 | Integridad de alertas | **CUMPLE** — imagen y registro se borran juntos |
+| RQNF18 | No repudio de evidencia | **CUMPLE** — imagen pixelizada + línea de auditoría |
+| RQNF20 | Arquitectura modular | **CUMPLE** — `risk_engine.py` separado de `server.py` |
+| RQNF23 | Registro de diagnóstico | **CUMPLE** — detalle en `/api/health` |
+| RQNF25 | Escalabilidad multicámara | **CUMPLE** — parámetro `?cam=` |
+| RQNF26 | Estado no operativo | **CUMPLE** — el estado refleja fallos reales |
 
-### Lo que NO está cubierto
+### Desviaciones conscientes y lo que no está cubierto
+
+Tres requisitos se cumplen **de forma distinta** a lo que pide el enunciado, y
+no por descuido:
+
+| Requisito | Lo que pide `Caso.md` | Lo que hace el sistema | Por qué |
+|---|---|---|---|
+| **RQF04** | puerta de alerta al 75 % / 85 % | la puerta de alerta usa **0.35** | Medida la confianza real del detector sobre el test set: `persona_caido` tiene mediana **0.39** y máximo **0.79**. Con 0.75 no pasaba ninguna detección y **no se disparaba jamás ninguna alerta**. El 85 % de confirmación sigue sin activarse por lo mismo. |
+| **RQF05** | algoritmo **ByteTrack** | seguimiento IoU propio | ByteTrack de Ultralytics se descartó porque arrastra estado interno de forma frágil entre llamadas; se implementó el comportamiento que pide el requisito (identidad estable y oclusión tolerada 1 s) en unas 30 líneas legibles. |
+| **RQF06** | persistencia **> 3 s** | **1.2 s** en rojo y **0.6 s** en ámbar | Una caída de pie al suelo dura ~1 s. Con 3 s el sistema solo alertaba cuando la persona llevaba rato en el suelo, que es justo lo que el requisito quiere evitar. Cambio pedido expresamente durante el desarrollo. |
+
+Además:
+
+- **RQNF10** (mAP@0.5 > 75 %) queda en **0.747 en test**: 0.003 por debajo.
+  La clase que lo frena es `persona`, cuyo *ground truth* de test es
+  pseudo-etiquetado de detector.
+- **RQNF11** (disponibilidad en horario de campus) y **RQNF27** (restricción de
+  actuación física) dependen del despliegue físico, no del código.
+- **RQF02 (2)(3)** —no sujetar el pasamanos, distracción— funcionan e están
+  implementados, pero **no se han medido**: ningún dataset anota esas
+  conductas. Se resuelven con keypoints de MediaPipe, como prescribe el
+  propio enunciado.
+- Los umbrales de postura se calibraron con el **motor completo**
+  (MediaPipe en modo *tracking*). Medidos con un script suelto dan 57 % de
+  falsas alarmas en vez de 8 %: el seguimiento temporal es lo que hace
+  estable la pose.
 
 - **RQNF04** (flujo continuo de cámara fija) y **RQNF19** en su parte de
   permisos por rol: la autenticación es un secreto compartido, no un modelo de
@@ -228,8 +261,56 @@ reenlazar el contexto CUDA, lo que costaba 85 ms por frame frente a 37 ms.
   datasets, pseudo-etiquetado de Le2i, primera vuelta de entrenamiento.
 - `DECISIONES_2.md` — parte 2: respuesta al fallo reportado con webcam,
   correcciones de fuga, y dos "mejoras" que resultaron peores y se revirtieron.
-- `DECISIONES_3.md` — parte 3: auditoría de requisitos, motor de riesgo,
-  seguridad, y datasets añadidos.
+- `DECISIONES_3.md` — partes 3 a 18: auditoría de requisitos, motor de
+  riesgo, seguridad, datasets añadidos, alertas, evidencia anotada, paquete
+  de descarga, reducción de sesgo, estado operativo y borrado de alertas.
+
+---
+
+## Alertas
+
+Una alerta salta cuando el riesgo **supera el tiempo de persistencia** exigido
+para su severidad y se mantiene ese tiempo:
+
+| Riesgo | Persistencia | Motivo |
+|---|---|---|
+| **Rojo** (caída, pérdida de equilibrio) | 1.2 s | filtra un tropiezo puntual sin perder la caída real |
+| **Ámbar** (pre-caída, tambaleo) | 0.6 s | el tambaleo es más breve y hay que avisar antes |
+
+Con tres capas de filtrado, como pide `RQF04`:
+
+1. **0.35 de confianza** para pasar la puerta de la alerta
+2. **tiempo de persistencia** según severidad, con **histéresis de 1 s**: si el
+   riesgo parpadea un fotograma no reinicia la cuenta
+3. **enfriamiento de 15 s** por persona y tipo, para que una condición
+   sostenida no genere una alerta cada 15 segundos
+
+### Qué se guarda
+
+Cada alerta deja en `runs/alerts/<AAAA-MM-DD>/`:
+
+- el **fotograma anotado** con las cajas y las señales de la postura
+- una línea en `alertas.jsonl` con hora, clase, severidad, confianza,
+  duración, identidad y referencia al requisito
+
+Los rostros se **pixelizan** antes de escribir (`RQNF14`, Ley 29733). La limpieza
+es automática: se conservan 7 días o las últimas 200 imágenes.
+
+### Desde el panel
+
+Cada pestaña tiene, bajo el panel de alertas:
+
+- **Descargar todo (ZIP)** — imágenes + registro + un README
+- **✕** en cada alerta — borrarla (imagen y línea juntas)
+- **casillas** + **Borrar seleccionadas**
+- **Borrar todas**, con confirmación
+
+### Imágenes fijas
+
+Una imagen subida **no genera alertas**: se analiza y se descarga con sus cajas,
+pero no suena ninguna alerta. Una fotografía no es un suceso en el tiempo. Las
+alertas son solo de vídeo y cámara en vivo.
+
 
 ---
 
@@ -247,11 +328,14 @@ reenlazar el contexto CUDA, lo que costaba 85 ms por frame frente a 37 ms.
 │   ├── add_zoom_variants.py primeros planos por recorte exacto
 │   ├── train.py             entrenamiento + evaluación
 │   ├── evaluate.py          evaluación de un checkpoint
-│   └── eval_scale.py        evaluación por escala y recorte
+│   ├── eval_scale.py        evaluación por escala y recorte
+│   ├── extract_frames.py    extracción de fotogramas de un clip (temporal)
+│   ├── label_video_frames.py etiquetado de esos fotogramas (temporal)
+│   └── build_kaggle_variant.py  variante con dataset externo (descartado)
 └── app/
     ├── server.py            servidor Flask + hilo trabajador
-    ├── risk_engine.py       motor de riesgo (RQF02-RQF07)
-    └── templates/           interfaz
+    ├── risk_engine.py       motor de riesgo (RQF02-RQF07) y alertas
+    └── templates/           interfaz (index, login)
 ```
 
 ## Licencia
