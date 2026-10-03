@@ -1160,6 +1160,26 @@ class RiskEngine:
                 det["ref"] = "RQF03"
             dets.append(det)
 
+        # Las señales de postura PERTENECEN a la persona a la que describe la
+        # pose, que es la caja con la que se emparejo. Antes solo sumaban al
+        # veredicto global: el panel ponia "Riesgo: ALTO" mientras la caja de
+        # la persona seguia diciendo "persona erguida", que es una
+        # contradiccion visible.
+        #
+        # Se vuelcan a esa caja: su riesgo pasa a ser el mayor entre el de su
+        # clase y el de las señales, y guarda cuales son para poder
+        # mostrarlas en la etiqueta.
+        if pose_signals and pose_idx >= 0 and pose_idx < len(dets):
+            d = dets[pose_idx]
+            orden = {"NEUTRO": 0, "CONTEXTO": 0, "BAJO": 1, "MEDIO": 2, "ALTO": 3}
+            actual = d.get("riesgo", "NEUTRO")
+            d["senales"] = [x["tipo"] for x in pose_signals]
+            d["riesgo"] = max([actual] + [x["riesgo"] for x in pose_signals],
+                               key=lambda r: orden.get(r, 0))
+            if d["riesgo"] != actual:
+                # el riesgo ahora viene de la senal, no de la clase
+                d["riesgo_por_clase"] = actual
+
         dets = self._track(dets)
         for conf_s, box in stairs:
             dets.append({

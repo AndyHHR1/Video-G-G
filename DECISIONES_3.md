@@ -1046,3 +1046,57 @@ El falso positivo en cámara **sigue siendo de alrededor del 8%** en el test, y
 en un vídeo real puede ser mayor: el umbral se calibró con gente de frente, no
 bajando escaleras desde un ángulo bajo. Con un vídeo suyo de verdad se podría
 recalibrar con datos del caso de uso.
+
+---
+
+# PARTE 17 — La caja contradecía al veredicto de riesgo
+
+## Síntoma
+
+Reportado: la caja dibujada decía «persona erguida» mientras el panel ponía
+**Riesgo: ALTO**. Las dos cosas a la vez, en la misma imagen.
+
+## Causa
+
+El veredicto global se compone de tres fuentes:
+
+```python
+risks  = [riesgo de cada persona]
+risks += [riesgo de las señales de postura]
+risks += ["ALTO"] * obstáculos de riesgo
+```
+
+Las **señales de postura** (`tambaleo`, `distracción`, `sin_pasamanos`) y los
+obstáculos solo sumaban al veredicto. La caja de la persona seguía mostrando
+**su clase**, y el color y el texto salían de la tabla estática `CLASS_INFO`,
+donde `persona_erguida` es BAJO.
+
+Resultado: veredicto ALTO con una caja verde de «persona erguida», sin que
+nadie supiera por qué.
+
+## Arreglo
+
+Las señales de postura **pertenecen a la persona que describe la pose**, que
+es la caja con la que se empareja por IoU. Ahora:
+
+1. Se vuelcan sobre esa caja: su riesgo pasa a ser el mayor entre el de su
+   clase y el de las señales, y guarda cuáles son en `senales`.
+2. El color del rectángulo y el fondo de la etiqueta usan ese riesgo real, no el
+   de la tabla estática.
+3. La etiqueta muestra las señales: `#1 Persona erguida +sin pasamanos +tambaleo 62%`.
+
+Ejemplo real devuelto por la API tras el arreglo:
+
+```
+Pérdida de equilibrio | riesgo: ALTO | señales: ['sin_pasamanos', 'tambaleo']
+```
+
+## Verificado
+
+45 cajas de imágenes con gente: **45 coherentes con el veredicto, 0 contradicciones**
+(comprobado tanto si las señales explican el ALTO como si no hay ALTO).
+
+Las detecciones de mobiliario siguen sin `class_name` (usan `objeto`): es el
+comportamiento de siempre y el frontend ya cae a ese campo.
+
+Las tres rutas de análisis y las cinco de consulta responden 200.

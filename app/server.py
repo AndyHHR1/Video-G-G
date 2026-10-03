@@ -308,17 +308,29 @@ def draw_all(frame: np.ndarray, result: dict) -> list[dict]:
             d["class_id"],
             {"name": d["class_name"], "color": (200, 200, 200), "risk": "NEUTRO"},
         )
+        # El color y el texto siguen el riesgo REAL de esa persona, que puede
+        # venir de una señal de postura (tambaleo, distracción, pasamanos) y no
+        # solo de su clase. Antes la caja decía "persona erguida" en verde
+        # mientras el veredicto era ALTO.
+        riesgo = d.get("riesgo") or info["risk"]
+        color = RISK_COLOR.get(riesgo, info["color"])
         x1, y1, x2, y2 = d["bbox"]
-        cv2.rectangle(frame, (x1, y1), (x2, y2), info["color"], 2)
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
         tid = d.get("track_id")
-        label = f'#{tid} {info["name"]} {d["confidence"]:.0%}' if tid else \
-                f'{info["name"]} {d["confidence"]:.0%}'
+        partes = [f'#{tid}'] if tid else []
+        partes.append(info["name"])
+        senales = d.get("senales") or []
+        if senales:
+            partes.append("+".join(s.replace("_", " ") for s in senales))
+        partes.append(f'{d["confidence"]:.0%}')
+        label = " ".join(partes)
         (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)
         ty = max(y1, th + 6)
-        cv2.rectangle(frame, (x1, ty - th - 6), (x1 + tw + 8, ty), info["color"], -1)
+        cv2.rectangle(frame, (x1, ty - th - 6), (x1 + tw + 8, ty), color, -1)
         cv2.putText(frame, label, (x1 + 4, ty - 5), cv2.FONT_HERSHEY_SIMPLEX,
                     0.5, (20, 20, 20), 2, cv2.LINE_AA)
-        out.append({**d, "class_name": info["name"], "risk": info["risk"]})
+        out.append({**d, "class_name": info["name"], "risk": riesgo,
+                    "color": color})
 
     for o in result.get("obstaculos", []):
         # El mobiliario se dibuja en color de contexto: es(scene), no riesgo.
