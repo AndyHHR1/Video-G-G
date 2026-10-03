@@ -38,6 +38,18 @@ weights/
 # a worktrees, que jamas deben versionarse.
 .kilo/
 
+# --- Imagenes de prueba del usuario ---
+# El usuario entrego capturas de su escena para diagnosticar. Son imagenes de
+# personas y se pidio expresamente que NO se subieran. Este patron se perdio
+# dos veces al reescribir el historial, porque estaba en el mismo commit que
+# borraba los ficheros. No volver a usar `git add -A` sin revisar.
+Fase*.png
+Fase*.jpg
+capturas/
+pruebas/
+img_prueba*
+test_img*
+
 # --- Secretos y credenciales ---
 # PANEL_TOKEN (RQNF19) se lee de variable de entorno, nunca del repo.
 .env
