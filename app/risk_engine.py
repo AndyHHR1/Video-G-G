@@ -172,6 +172,7 @@ class Alert:
     bbox: list[float]
     evidence: str            # ruta del fotograma capturado
     duration_s: float
+    audio_evidence: str = "" # ruta del clip de audio sincronizado (RQNF-AUDIO)
     system_status: str = "OPERATIVO"
 
     def to_dict(self) -> dict:
@@ -871,6 +872,12 @@ class RiskEngine:
         self._last_class = None
         self._last_tambaleo = False
         self._last_pose_landmarks = None
+        # Resetear el buffer de audio del navegador (RQNF-AUDIO).
+        try:
+            from audio_extractor import audio_manager
+            audio_manager.reset()
+        except Exception:
+            pass
 
     def _estado_operativo(self) -> str:
         """Estado real del sistema (RQNF09 auto-descriptividad, RQNF26).

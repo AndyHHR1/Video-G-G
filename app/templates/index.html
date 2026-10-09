@@ -497,6 +497,8 @@ let cam = { on:false, stream:null, busy:false, last:0, sent:0, err:null, ok:fals
 function stopCam() {
   cam.on = false;
   if (cam.stream) { cam.stream.getTracks().forEach(t => t.stop()); cam.stream = null; }
+  // Detener la captura de audio (RQNF-AUDIO).
+  if (cam.audioRecorder) { cam.audioRecorder.stop(); cam.audioRecorder = null; }
   if (cam.video) { cam.video.remove(); cam.video = null; }
   document.querySelectorAll('#scam video').forEach(v => v.remove());
   cam.sent = 0; cam.err = null; cam.ok = false; cam.fps = 0; cam.t0 = 0;
@@ -531,9 +533,18 @@ $('#bcam').onclick = async () => {
 
   async function conectarCamara() {
     try {
+      // audio:true captura micrófono para la extracción de audio sincronizada
+      // con las alertas (RQNF-AUDIO). Si el navegador niega audio, se sigue
+      // funcionando con video por separado.
       return await navigator.mediaDevices.getUserMedia({
-        video: { width:{ideal:1280}, height:{ideal:720} }, audio:false });
+        video: { width:{ideal:1280}, height:{ideal:720} }, audio:true });
     } catch (e) {
+      // Si falla con audio, reintentar sin audio (algunos navegadores piden
+      // permisos por separado).
+      try {
+        return await navigator.mediaDevices.getUserMedia({
+          video: { width:{ideal:1280}, height:{ideal:720} }, audio:false });
+      } catch (e2) { e = e2; }
       const m = {NotAllowedError:'Permiso denegado. Acepta la cámara en el candado de la barra de direcciones.',
                  NotFoundError:'No se ha encontrado ninguna cámara en este equipo.',
                  NotReadableError:'La cámara está siendo usada por otra aplicación.'}[e.name];
@@ -554,6 +565,34 @@ $('#bcam').onclick = async () => {
   cam.fps = 0; cam.t0 = 0;
   $('#bcam').disabled = true; $('#bstop').disabled = false;
 
+  // --- captura de audio del navegador (RQNF-AUDIO) ---
+  // Se crea un MediaRecorder sobre la pista de audio del stream. Si el
+  // navegador no concedió permiso de audio (o no hay micrófono), el stream
+  // no tiene pista de audio: se captura silencio y el servidor descarta los
+  // paquetes vacíos. Los chunks de audio se envían a /api/audio en streaming.
+  let audioRecorder = null;
+  const audioTracks = cam.stream.getAudioTracks();
+  if (audioTracks.length > 0) {
+    try {
+      audioRecorder = new MediaRecorder(cam.stream);
+      audioRecorder.ondataavailable = async (e) => {
+        if (e.data && e.data.size > 0) {
+          try {
+            const buf = await e.data.arrayBuffer();
+            await fetch('/api/audio', {method:'POST', headers:{'Content-Type':'audio/wav'}, body: buf});
+          } catch (e2) { /* silencioso: no interrumpir el video */ }
+        }
+      };
+      audioRecorder.start(200);  // chunk cada 200 ms (~5 fps de audio)
+      cam.audioOk = true;
+    } catch (e2) {
+      cam.audioOk = false;
+    }
+  } else {
+    cam.audioOk = false;
+  }
+  cam.audioRecorder = audioRecorder;
+
   // El <video> es solo la fuente del canvas. NO se oculta con display:none:
   // un video con display:none no carga metadata en varios navegadores, se
   // queda con videoWidth = 0 y el canvas sale 0x0, con lo que toBlob() devuelve
@@ -573,12 +612,14 @@ $('#bcam').onclick = async () => {
   prev.play().catch(()=>{});
 
   const setStat = () => {
+    const audioStr = cam.audioOk ? ' 🔊 (audio activo, RQNF-AUDIO)' : ' 🔇 (sin audio)';
     $('#cammeta').innerHTML =
       `${cam.ok ? 'conectada' : '<b style="color:#e03c3c">sin señal</b>'} · ` +
       `cámara ${v.videoWidth}×${v.videoHeight} → envío ${small.width}×${small.height} · ` +
       `${cam.sent} frames · ${cam.fps.toFixed(1)} fps · ` +
       `${$('#fast').checked ? 'modo rápido (cajas retrasadas)' : 'modo sincrono'} · ` +
       `umbral ${$('#ccam').value}` +
+      audioStr +
       (cam.err ? ` · <b style="color:#e03c3c">${cam.err}</b>` : '');
   };
 
@@ -713,10 +754,15 @@ async function cargarAlertas() {
   const html = lista.length ? lista.map(a => `
     <div class="alert-item ${a.severity==='ALTO'?'alert-alto':'alert-medio'}" data-id="${a.alert_id}">
       <input type="checkbox" class="alert-sel" value="${a.alert_id}" title="Seleccionar">
-      ${a.imagen ? `<a href="${a.imagen}" download title="Descargar">
-          <img src="${a.imagen}" alt=""></a>`
-         : '<div style="width:96px;height:66px;background:#0d0f14;border-radius:5px"></div>'}
-      <div style="min-width:0;flex:1">
+       ${a.imagen ? `<a href="${a.imagen}" download title="Descargar">
+           <img src="${a.imagen}" alt=""></a>`
+          : '<div style="width:96px;height:66px;background:#0d0f14;border-radius:5px"></div>'}
+       ${a.audio ? `<div style="margin-top:4px">
+           <audio controls style="width:100%;height:30px">
+             <source src="${a.audio}" type="audio/wav">
+           </audio>
+         </div>` : ''}
+       <div style="min-width:0;flex:1">
         <div class="alert-tipo">${(a.risk_type||'').replace(/_/g,' ')}
           <span class="badge">${SEV_TXT[a.severity]||a.severity}</span></div>
         <div class="alert-meta">${(a.timestamp||'').replace('T',' ')} · ${a.duration_s}s ·

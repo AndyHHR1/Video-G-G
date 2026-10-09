@@ -95,6 +95,7 @@ RISK_ORDER = {"ALTO": 3, "MEDIO": 2, "BAJO": 1, "NEUTRO": 0, "CONTEXTO": 0}
 
 sys.path.insert(0, str(ROOT / "app"))
 from risk_engine import RISK_COLOR, RiskEngine
+from audio_extractor import audio_manager, AUDIO_PRE_FALL, AUDIO_POST_FALL
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 512 * 1024 * 1024   # 512 MB
@@ -233,6 +234,10 @@ class Inferencer:
         # La evidencia de las alertas se guarda YA DIBUJADA: dentro de
         # step() todavia no se han pintado las cajas.
         self._engine.flush_evidence(out)
+        # Extracción de audio sincronizado con la alerta (RQNF-AUDIO).
+        # Se registra el timestamp del frame para cada alerta nueva y se
+        # extrae el clip de 0.5s antes → 0.5s después de la caída.
+        _extract_alert_audio(self._engine, out)
         t_draw = (time.perf_counter() - t1) * 1000
         return out, result, detections, {
             "predict": round(t_predict, 1), "draw": round(t_draw, 1),
@@ -375,6 +380,40 @@ def encode_jpeg(image: np.ndarray, quality: int = 82) -> bytes:
     if not ok:
         raise RuntimeError("no se pudo codificar la imagen")
     return buf.tobytes()
+
+
+# --------------------------------------------------------------------------- #
+# Extracción de audio sincronizado con alertas (RQNF-AUDIO)
+# --------------------------------------------------------------------------- #
+# El motor registra el timestamp del fotograma en `alert._ts` cuando dispara una
+# alerta. Aquí se extrae el clip de 0.5s antes → 0.5s después de ese timestamp
+# desde el video original (modo /api/video) o del ring buffer de audio del
+# navegador (modo /api/frame). La ruta se guarda en `alert.audio_evidence`.
+def _extract_alert_audio(engine: RiskEngine, frame: np.ndarray | None = None) -> None:
+    """Extrae audio para las alertas pendientes del motor.
+
+    Se llama justo después de `flush_evidence(frame)` para que la imagen y el
+    audio de la evidencia estén sincronizados.
+    """
+    pending = getattr(engine, "_pending", [])
+    if not pending:
+        return
+    # En modo video, el timestamp del frame en el video (no epoch) se
+    # calcula a partir del número de fotograma y el fps. El motor
+    # expone `_video_fps` y `_video_frame_no` cuando se pone en modo video.
+    video_fps = getattr(engine, "_video_fps", None)
+    video_frame = getattr(engine, "_video_frame_no", None)
+    for alert in pending:
+        ts = getattr(alert, "_ts", None)
+        if ts is None:
+            continue
+        if video_fps and video_frame is not None:
+            ts = video_frame / video_fps
+        audio_manager.register_fall_timestamp(alert.alert_id, ts)
+        try:
+            audio_manager.extract_for_alert(alert)
+        except Exception as exc:  # noqa: BLE001
+            print(f"  [aviso] no se pudo extraer audio: {exc}", flush=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -614,6 +653,12 @@ def api_alerts():
             dia = Path(ev).parent.name
             existe = rel and (Path(ev).exists())
             a["imagen"] = f"/api/alerta-imagen/{dia}/{rel}" if existe else None
+            # Audio sincronizado con la alerta (RQNF-AUDIO).
+            audio_path = a.get("audio_evidence", "")
+            if audio_path and Path(audio_path).is_file():
+                a["audio"] = f"/api/alerta-audio/{Path(audio_path).parent.name}/{Path(audio_path).name}"
+            else:
+                a["audio"] = None
             lineas.append(a)
     lineas.reverse()
     return jsonify({"alertas": lineas[:100], "total": len(lineas)})
@@ -670,6 +715,15 @@ def api_borrar_alertas():
                 destino.unlink()
         except Exception:
             pass          # la imagen ya no estaba: se ignora
+        # También borrar el archivo de audio asociado (RQNF-AUDIO).
+        audio_path = a.get("audio_evidence") or ""
+        if audio_path:
+            try:
+                adest = Path(audio_path).resolve()
+                if str(adest).startswith(str(d.resolve()) + "/") and adest.is_file():
+                    adest.unlink()
+            except Exception:
+                pass
         borradas += 1
     with (d / "alertas.jsonl").open("w", encoding="utf-8") as fh:
         for a in conservadas:
@@ -789,6 +843,9 @@ def api_video():
     tmp = Path(tempfile.gettempdir()) / f"sub_{uuid.uuid4().hex}{suffix}"
     tmp.write_bytes(raw)
 
+    # Registrar el video para extracción de audio sincronizada con alertas.
+    audio_manager.set_video_source(str(tmp))
+
     cap = cv2.VideoCapture(str(tmp))
     if not cap.isOpened():
         tmp.unlink(missing_ok=True)
@@ -820,6 +877,12 @@ def api_video():
 
     total_counts, frames, t_infer = Counter(), 0, 0.0
 
+    # Marcar la fuente de video para que la extracción de audio use timestamps
+    # relativos al video (no epoch). El motor expone estos atributos como
+    # metadatos para `_extract_alert_audio`.
+    engine = _inferencer._engine
+    engine._video_fps = fps
+
     try:
         while True:
             ok, frame = cap.read()
@@ -827,6 +890,7 @@ def api_video():
                 break
             t0 = time.perf_counter()
             annotated, result, _d, _t = _inferencer.detect(frame, conf, imgsz)
+            engine._video_frame_no = frames  # frame actual (0-indexed)
             t_infer += time.perf_counter() - t0
             frames += 1
             total_counts.update(x.get("class_name") or x.get("tipo", "?")
@@ -846,6 +910,12 @@ def api_video():
         payload = (final_tmp if final_tmp.is_file() else out_tmp)
         payload = payload.read_bytes() if payload.is_file() else b""
     finally:
+        # Limpiar referencias de audio del video procesado.
+        audio_manager.clear_video_source()
+        if hasattr(engine, "_video_fps"):
+            del engine._video_fps
+        if hasattr(engine, "_video_frame_no"):
+            del engine._video_frame_no
         tmp.unlink(missing_ok=True)
         out_tmp.unlink(missing_ok=True)
         final_tmp.unlink(missing_ok=True)
@@ -857,6 +927,34 @@ def api_video():
         io.BytesIO(payload), mimetype="video/mp4", as_attachment=True,
         download_name="resultado.mp4",
     )
+
+
+@app.post("/api/audio")
+def api_audio():
+    """Recibe paquetes de audio del navegador (modo cámara en vivo).
+
+    El navegador captura audio+vídeo con `getUserMedia({audio:true})` y envía
+    paquetes WAV (mono, 16 kHz, 16-bit) como cuerpo binario. El servidor los
+    almacena en un ring buffer; cuando se dispara una alerta, se extrae la
+    ventana de 0.5s antes → 0.5s después.
+    """
+    raw = request.get_data(cache=False)
+    if not raw:
+        return jsonify({"error": "no se ha enviado ningún audio"}), 400
+    # El cliente envía datos PCM raw (mono, 16 kHz, s16) o WAV.
+    # Se reenvía al ring buffer; el manejo de formato lo hace el buffer.
+    audio_manager.feed_live_audio(raw)
+    return jsonify({"ok": True, "received": len(raw)})
+
+
+@app.get("/api/alerta-audio/<dia>/<nombre>")
+def api_alerta_audio(dia: str, nombre: str):
+    """Sirve el archivo de audio de una alerta, siempre dentro de `runs/alerts/`."""
+    base = RiskEngine.ALERT_DIR.resolve()
+    destino = (base / dia / nombre).resolve()
+    if not str(destino).startswith(str(base) + "/") or not destino.is_file():
+        return jsonify({"error": "no encontrado"}), 404
+    return send_file(str(destino), mimetype="audio/wav")
 
 
 def _mjpeg(camera_index: int, conf: float, imgsz: int):
@@ -978,6 +1076,12 @@ def health():
         "device": "cuda:0" if _cv_cuda() else "cpu",
         "classes": len(CLASS_INFO),
         "auth": "activo" if AUTH_ON else "desactivado (PANEL_TOKEN sin definir)",
+        "audio": {
+            "video_extraction": "activo (ffmpeg)",
+            "browser_live": "activo (MediaRecorder → /api/audio)",
+            "server_camera": "no disponible (sin micrófono en el servidor)",
+            "window": f"{AUDIO_PRE_FALL}s antes → {AUDIO_POST_FALL}s después",
+        },
     })
 
 
