@@ -5,8 +5,8 @@ Detector de riesgo de caídas en escaleras con **YOLOv8** (Ultralytics),
 plataforma web local para probarlo con imagen, vídeo o cámara en vivo.
 
 El sistema está diseñado contra los requisitos del documento `Caso.md`
-(IEEE 830 / ISO 25010): 8 funcionales (RQF01–RQF08) y 27 no funcionales
-(RQNF01–RQNF27).
+(IEEE 830 / ISO 25010): 8 funcionales (RQF01–RQF08) y 28 no funcionales
+(RQNF01–RQNF26 + RQNF-AUDIO).
 
 ---
 
@@ -257,13 +257,12 @@ Además:
 
 ## Documentación de decisiones
 
-- `DECISIONES.md` — parte 1: auditoría de datos, unificación de los tres
-  datasets, pseudo-etiquetado de Le2i, primera vuelta de entrenamiento.
-- `DECISIONES_2.md` — parte 2: respuesta al fallo reportado con webcam,
-  correcciones de fuga, y dos "mejoras" que resultaron peores y se revirtieron.
-- `DECISIONES_3.md` — partes 3 a 18: auditoría de requisitos, motor de
-  riesgo, seguridad, datasets añadidos, alertas, evidencia anotada, paquete
-  de descarga, reducción de sesgo, estado operativo y borrado de alertas.
+- `Caso.md` — documento de requisitos (IEEE 830 / ISO 25010).
+- `DECISIONES.md` — registro consolidado de decisiones de diseño: auditoría de
+  datos, unificación de datasets, pseudo-etiquetado de Le2i, motor de riesgo,
+  desviaciones conscientes (ByteTrack→IoU, 3s→1.2s persistencia, 75%→35% umbral
+  de alerta), reducción de sesgo, estado operativo, borrado de alertas, y
+  extracción de audio sincronizado con alertas.
 
 ---
 
@@ -290,11 +289,14 @@ Con tres capas de filtrado, como pide `RQF04`:
 Cada alerta deja en `runs/alerts/<AAAA-MM-DD>/`:
 
 - el **fotograma anotado** con las cajas y las señales de la postura
+- el **clip de audio** de 0.5 s antes → 0.5 s después de la caída (RQNF-AUDIO),
+  cuando el video o el navegador aportan pista de audio
 - una línea en `alertas.jsonl` con hora, clase, severidad, confianza,
-  duración, identidad y referencia al requisito
+  duración, identidad, referencia al requisito y ruta de imagen + audio
 
 Los rostros se **pixelizan** antes de escribir (`RQNF14`, Ley 29733). La limpieza
-es automática: se conservan 7 días o las últimas 200 imágenes.
+es automática: se conservan 7 días o las últimas 200 imágenes. El audio se
+borra junto con la alerta al usar el botón de borrado.
 
 ### Desde el panel
 
@@ -335,6 +337,7 @@ alertas son solo de vídeo y cámara en vivo.
 └── app/
     ├── server.py            servidor Flask + hilo trabajador
     ├── risk_engine.py       motor de riesgo (RQF02-RQF07) y alertas
+    ├── audio_extractor.py   extracción de audio sincronizado con alertas (RQNF-AUDIO)
     └── templates/           interfaz (index, login)
 ```
 

@@ -81,10 +81,17 @@ dar una falsa sensación de cobertura.
 
 | Ruta | Método | Descripción |
 |------|--------|-------------|
-| `/api/health` | GET | Pesos cargados, dispositivo y nº de clases |
+| `/api/health` | GET | Pesos cargados, dispositivo, nº de clases + estado de audio |
 | `/api/detect` | POST | multipart `file` + `conf`. Devuelve detecciones, resumen de riesgo, tiempos e imagen anotada en base64 |
-| `/api/video` | POST | multipart `file` + `conf`. Devuelve `video/mp4` anotado |
-| `/api/stream` | GET | `?conf=&imgsz=&cam=` → stream MJPEG |
+| `/api/video` | POST | multipart `file` + `conf`. Devuelve `video/mp4` anotado + audio extraído de alertas |
+| `/api/frame` | POST | Inferencia sobre un frame JPEG (navegador → servidor). Recibe video, audio por separado |
+| `/api/stream` | GET | `?conf=&imgsz=&cam=` → stream MJPEG (sin audio) |
+| `/api/audio` | POST | Recibe chunks WAV del navegador para el ring buffer de audio |
+| `/api/alerts` | GET | Historial de alertas con URLs de imagen y audio |
+| `/api/alerta-imagen/<dia>/<nombre>` | GET | Sirve imagen de evidencia |
+| `/api/alerta-audio/<dia>/<nombre>` | GET | Sirve clip de audio WAV |
+| `/api/alertas.zip` | GET | ZIP con todas las alertas (imagen + audio + jsonl) |
+| `/api/alertas` | DELETE | Borra alertas (imagen + audio + registro juntos) |
 
 ## Nota de rendimiento
 
@@ -110,3 +117,7 @@ el stream la mantiene ocupada y el rendimiento es más estable.
 - Los videos se procesan enteros en memoria antes de devolverlos; para clips
   largos conviene usar el modo cámara o clips cortos.
 - No hay autenticación ni límite de tasa: **no exponer a internet**.
+- **Audio del servidor** (`/api/stream`): la cámara física del servidor no
+  incluye micrófono; el audio solo está disponible en modo navegador o video.
+- **Audio del navegador**: requiere permiso de micrófono; si se deniega, el
+  sistema funciona sin audio (el indicador muestra `🔇`).

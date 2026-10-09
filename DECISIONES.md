@@ -157,14 +157,48 @@ en val con ambas cifras y en test solo con la métrica de GT humano**.
 | `RQNF01` ≥30 FPS, latencia <500 ms | **CUMPLE**: 22.7 ms/frame, 44 FPS |
 | `RQNF03` ≥6 GB VRAM | **CUMPLE**: RTX 5050, 8.1 GB |
 | `RQNF05` distinguir caída/no caída | **CUMPLE**: `persona_caido` mAP50 0.90 (test) |
-| `RQNF10` mAP@0.5 > 75% | **CUMPLE en val (0.800) y en test con GT humano (0.756)** |
-| `RQNF12` resiliencia a iluminación | Augmentations HSV reforzadas (`hsv_s=0.7`, `hsv_v=0.4`) |
+| `RQNF10` mAP@0.5 > 75% | **CUMPLE en val (0.810) y en test con GT humano (0.756)** |
+| `RQNF12` resiliencia a iluminación | **CUMPLE**: augmentations HSV reforzadas (`hsv_s=0.7`, `hsv_v=0.4`) en `configs/train.yaml:43` |
 | `RQF02` (4) pre-caída | **Parcial**: la clase existe y funciona, pero ver §8 |
 | `RQF02` (1) obstáculos, (2) pasamanos, (3) distracción | **NO CUBIERTO**: no hay datos. Según el diseño de `Caso.md` son keypoints de MediaPipe, no cajas de YOLO |
+| `RQNF-AUDIO` evidencia de audio sincronizado | **CUMPLE**: extracción 0.5s antes → 0.5s después (`audio_extractor.py:67-68`, 117-264) |
 
 ---
 
-## 8. El problema real que queda abierto
+## 8. Decisión: extracción de audio sincronizada con alertas (RQNF-AUDIO)
+
+**Problema:** las alertas de caída solo incluían una imagen anotada. Se pidió
+evidencia de audio de **0.5 s antes de la caída hasta 0.5 s después**.
+
+**Decisiones:**
+
+1. **Video** (`/api/video`): se extrae del archivo original con ffmpeg. El
+   timestamp del frame se calcula como `frame_index / fps` (no epoch), porque
+   el modelo corre frame-a-frame y el tiempo real del servidor no corresponde
+   al tiempo del video. Implementado en `server.py:878-881` (marca fps y
+   frame en el motor) y `_extract_alert_audio()` en `server.py:393-410`.
+
+2. **Navegador en vivo** (`/api/frame`): el frontend captura audio con
+   `getUserMedia({audio:true})` y `MediaRecorder` (chunks de 200 ms), enviándolos
+   a `/api/audio`. El servidor mantiene un ring buffer de 10 s
+   (`LiveAudioBuffer`, `audio_extractor.py:141`). Al dispararse una alerta,
+   `extract_clip()` recorta la ventana 0.5 s antes → 0.5 s después.
+
+3. **Cámara del servidor** (`/api/stream`): el servidor no tiene micrófono
+   asociado a la cámara física. El audio no está disponible en este modo.
+   La UI muestra `🔇 (sin audio)`.
+
+4. **Formato**: WAV mono, 16 kHz, 16-bit. El archivo se guarda en
+   `runs/alerts/<fecha>/audio_<alert_id>.wav`, al lado de la imagen de
+   evidencia. La ruta se almacena en `alert.audio_evidence`
+   (`risk_engine.py:175`).
+
+5. **Limpieza**: al borrar alertas, también se borran los archivos de audio
+   asociados (`server.py:718-725`).
+
+---
+
+## 10. El problema real que queda abierto
 
 La clase `persona_desequilibrio` — el objetivo del proyecto — es la **peor
 clase** y la matriz de confusión muestra exactamente por qué:
@@ -192,7 +226,7 @@ Siguiente paso natural: más datos de pre-caída en contexto de escalera
 
 ---
 
-## 9. Reproducibilidad
+## 11. Reproducibilidad
 
 ```bash
 python3 -m venv venv
