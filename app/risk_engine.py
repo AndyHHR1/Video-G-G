@@ -9,7 +9,7 @@ Reparto de responsabilidades:
   aqui    -> RQF02 (1) obstaculos, (2) no uso del pasamanos, (3) distraccion
              RQF03  discriminacion transito seguro / conducta de riesgo
              RQF04  doble umbral 75% pre-filtrado / 85% confirmacion
-             RQF05  seguimiento con ByteTrack y tolerancia a oclusion ~1 s
+             RQF05  seguimiento IoU propio (~30 líneas) y tolerancia a oclusion ~1 s
              RQF06  persistencia: la condicion debe durar > 3 s
              RQF07  alerta estructurada con evidencia fotografica
              RQNF14 anonimizacion de rostros
