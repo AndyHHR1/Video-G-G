@@ -90,7 +90,7 @@ Personal de Seguridad y Supervisores de Campus: Representa la referencia funcion
 1.2. Ámbito del Sistema
 1.2.1. Identificación del Sistema
 Nombre del Software: Sistema Inteligente para Prevención de Caídas y Riesgos en Escaleras Basado en Video con YOLOv8 y MediaPipe (V4)
-Tipo de Producto: Aplicación independiente (standalone) para procesamiento e inspección visual en tiempo real con aceleración por hardware (GPU).
+Tipo de Producto: Aplicación independiente (standalone) para procesamiento e inspección visual en tiempo real con aceleración por hardware (GPU NVIDIA CUDA 12.8, con fallback a CPU modo headless).
 1.2.2. Alcance Operativo (Lo que el sistema HARÁ)
 Basado en las capacidades aprobadas en los Requisitos Funcionales (RQF01 al RQF08), el sistema realizará de manera automatizada las siguientes funciones:
 Ingesta continua: Captura de la señal de video en vivo proveniente de una cámara fija instalada en un tramo de escalera de la UPAO (RQF01).
@@ -185,10 +185,10 @@ Consideraciones acerca de la Seguridad y Protección de Datos:
 Marco Legal Personal: Cumplimiento obligatorio de la Ley N.º 29733 (Ley de Protección de Datos Personales del Perú) en la captura, procesamiento y almacenamiento de los flujos de video y fotogramas donde aparezcan estudiantes, docentes y personal transeúnte en las escaleras.
 Seguridad de la Información (SGSI): Aplicación de los controles de la norma ISO/IEC 27001 para salvaguardar la confidencialidad, integridad y disponibilidad de las grabaciones de video, evitando accesos no autorizados y protegiendo los canales de transmisión entre la cámara, el servidor de cómputo y el panel de supervisión.
 Limitaciones del Hardware y Procesamiento:
-El procesamiento de los modelos de visión por computadora (YOLOv8 para objetos y MediaPipe Pose para estimación esquelética corporal) y el seguimiento espacial (algoritmo de seguimiento IoU propio) requiere obligatoriamente un entorno de ejecución con aceleración por hardware basado en GPU NVIDIA con capacidad mínima de 6 GB de VRAM.
+El procesamiento de los modelos de visión por computadora (YOLOv8 para objetos y MediaPipe Pose para estimación esquelética corporal) y el seguimiento espacial (algoritmo de seguimiento IoU propio) está optimizado para **GPU NVIDIA** (CUDA 12.8, mínimo 6 GB VRAM). En la V1, también funciona en **modo CPU** (fallback headless, más lento) mediante `--device cpu`.
 En la primera versión, el sistema está restringido al procesamiento de un único flujo continuo de video proveniente de una cámara fija instalada en un tramo de escalera.
 Operaciones Paralelas y Rendimiento en Tiempo Real:
-El sistema debe garantizar un procesamiento continuo en GPU a una tasa sostenida de al menos 30 FPS (requisito formal RQNF01). En la versión V1, el rendimiento real mide 26.5 fps con personas presentes (MediaPipe Pose en CPU es el cuello de botella, ~18 ms por frame); sin modo asíncrono se alcanzan ~20 fps. El requisito de 30 FPS no se cumple de forma sostenida en escenas con peatones.
+El sistema debe garantizar un procesamiento continuo a una tasa sostenida de al menos 30 FPS (RQNF01). En la V1 con GPU, el rendimiento mide 26.5 fps con personas presentes (MediaPipe Pose en CPU es el cuello de botella, ~18 ms por frame); sin modo asíncrono se alcanzan ~20 fps. En modo CPU (sin GPU) el rendimiento es ~3× más lento (~7 fps). El requisito de 30 FPS no se cumple de forma sostenida en escenas con peatones en V1.
 La latencia máxima permitida para la emisión de la alerta hacia el panel de supervisión no superará los 500 ms tras confirmarse la persistencia temporal del riesgo (tiempo mínimo según nivel: ALTO 1.2 s, MEDIO 0.6 s, con histéresis 1.0 s).
 Funciones de Auditoría y Control de Calidad del Software:
 Modelo de Calidad de Software: Evaluación de las características del producto según ISO/IEC 25010:2023 (marco general de la familia ISO/IEC 25000 SQuaRE), asegurando altos estándares de idoneidad funcional, fiabilidad, eficiencia en el rendimiento y capacidad de interacción.
@@ -212,7 +212,7 @@ Se presupone la conservación de los elementos estructurales de la escalera (com
 Suposiciones sobre el Dataset y el Rendimiento del Modelo:
 Se asume que los datasets de entrenamiento (secuencias de caídas Le2i, SisFall, FDD, URFD, PPGIA-UNIFOR TsetFall Dataset complementados con tomas de escaleras UPAO) son representativos para alcanzar una precisión promedio media (mAP@0.5 > 75%), cumpliendo con la norma ISO/IEC 5259-3.
 Dependencias del Entorno de Software:
-El correcto desempeño computacional (≥ 30 FPS) depende de la compatibilidad y correcta instalación de las librerías de aceleración por hardware (controladores NVIDIA CUDA / TensorRT) sobre el sistema operativo en el servidor de ejecución.
+El correcto desempeño computacional (≥ 30 FPS con GPU; ~7 FPS en modo CPU) depende de la compatibilidad y correcta instalación de las librerías de aceleración por hardware (controladores NVIDIA CUDA 12.8) sobre el sistema operativo en el servidor de ejecución, o del uso de `setup.sh` que detecta y configura el entorno automáticamente.
 Disponibilidad del Personal de Operación:
 Se presupone que el personal de seguridad o supervisores del campus mantendrán operativo el panel de control durante las horas de trabajo para recibir las notificaciones y ejecutar las acciones preventivas ante la generación de una alerta.
 2.6. Requisitos Futuros
@@ -546,7 +546,7 @@ Eficiencia de Desempeño > Utilización de Recursos
 Subsección IEEE 830:
 3.4 Restricciones de Diseño
 Descripción:
-El sistema debe ejecutar los algoritmos de inferencia (YOLOv8 para objetos y MediaPipe Pose para estimación esquelética) y seguimiento (algoritmo IoU propio) haciendo uso de aceleración por GPU NVIDIA con VRAM mínima de seis (6) gigabytes (GB).
+El sistema debe ejecutar los algoritmos de inferencia (YOLOv8 para objetos y MediaPipe Pose para estimación esquelética) y seguimiento (algoritmo IoU propio) haciendo uso de aceleración por GPU NVIDIA con VRAM mínima de seis (6) gigabytes (GB). Se recomienda `setup.sh` para configuración automática de CUDA; alternativamente, en ausencia de GPU, el sistema funciona en modo CPU con `--device cpu`.
 
 
 Especificación de Requerimiento No Funcional
@@ -983,7 +983,7 @@ Salida: Secuencia continua de fotogramas sin procesar (raw frames).
 
 2. Etapa 2: Análisis de Visión por Computadora e Inferencia
 Entrada: Secuencia continua de fotogramas sin procesar (raw frames).
-Procesamiento: Inferencia combinada en GPU (VRAM ≥ 6 GB, conforme a RQNF03) del modelo propio YOLOv8 (6 clases: persona_caido, persona_sentado, persona_erguida, escalera, persona, persona_desequilibrio) para detección de objetos en escalones, más MediaPipe Pose (modo tracking, static_image_mode=False) para estimación esquelética. Se identifican las 4 categorías de riesgo (RQF02), se discrimina tránsito seguro de imprudencias (RQF03) y se aplica umbral de confianza del 75% pre-filtrado / 85% confirmación (RQF04). Un detector COCO separado (yolov8s.pt, CONF_OBSTACLE=0.25) detecta obstáculos sobre escalón (mochilas, botellas, libros, etc.).
+Procesamiento: Inferencia combinada en GPU (VRAM ≥ 6 GB, conforme a RQNF03; o CPU con `--device cpu`) del modelo propio YOLOv8 (6 clases: persona_caido, persona_sentado, persona_erguida, escalera, persona, persona_desequilibrio) para detección de objetos en escalones, más MediaPipe Pose (modo tracking, static_image_mode=False) para estimación esquelética. Se identifican las 4 categorías de riesgo (RQF02), se discrimina tránsito seguro de imprudencias (RQF03) y se aplica umbral de confianza del 75% pre-filtrado / 85% confirmación (RQF04). Un detector COCO separado (yolov8s.pt, CONF_OBSTACLE=0.25) detecta obstáculos sobre escalón (mochilas, botellas, libros, etc.).
 Salida: Cajas delimitadoras de objetos, keypoints posturales de transeúntes, categorías de riesgo detectadas y puntajes de confianza asociados.
 
 3. Etapa 3: Seguimiento Espacio-Temporal y Evaluación de Riesgo

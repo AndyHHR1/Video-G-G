@@ -11,6 +11,13 @@
 #
 #   ./venv/bin/pip install --index-url https://download.pytorch.org/whl/cu128 \
 #       torch==2.11.0+cu128 torchvision==0.26.0+cu128
+#
+# PARA CPU (sin GPU NVIDIA): usar setup.sh que detecta hardware automáticamente,
+# o instalar manualmente:
+#   ./venv/bin/pip install --index-url https://download.pytorch.org/whl/cpu \
+#       "torch==2.6.0+cpu" "torchvision==0.21.0+cpu"
+#   ./venv/bin/pip install onnxruntime==1.30.0  # CPU instead of onnxruntime-gpu
+# (No instalar nvidia-cu12* packages en modo CPU)
 
 torch==2.11.0+cu128
 torchvision==0.26.0+cu128

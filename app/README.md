@@ -20,6 +20,7 @@ Opciones:
 | `--conf` | `0.25` | Umbral por defecto |
 | `--imgsz` | `640` | Resolución de inferencia |
 | `--host` / `--port` | `127.0.0.1` / `5000` | Escucha |
+| `--device` | `auto` | `auto`, `cpu`, `cuda`, o índice GPU (0, 1...) |
 | `--debug` | off | Recarga automática de Flask |
 
 Para exponerla en la red local (p. ej. desde el móvil):
@@ -97,7 +98,7 @@ dar una falsa sensación de cobertura.
 
 Toda la inferencia y el dibujo se ejecutan en **un único hilo trabajador
 persistente** (`Inferencer`), no en el hilo de cada petición. El motivo es
-medible en esta máquina: Flask atiende cada petición en un hilo distinto y en
+medible en esta máquina (con GPU): Flask atiende cada petición en un hilo distinto y en
 un hilo recién creado hay que reenlazar el contexto CUDA, lo que cuesta
 
 | Operación | Hilo ya enlazado | Hilo nuevo |
@@ -106,9 +107,14 @@ un hilo recién creado hay que reenlazar el contexto CUDA, lo que cuesta
 | dibujo OpenCV | 0.13 ms | ~23 ms |
 
 Con el hilo único la petición queda en **~37 ms de mediana** (mínimo 21.7 ms)
-en lugar de ~85 ms. La latencia sube y baja según la frecuencia de peticiones
+en lugar de ~85 ms. La latencia subde y baja según la frecuencia de peticiones
 porque la GPU baja de estado de energía cuando está ociosa; en el modo cámara
 el stream la mantiene ocupada y el rendimiento es más estable.
+
+> **Nota:** En modo CPU (sin GPU) el contexto CUDA no aplica. El overhead
+> del hilo único aún evita overhead de inicialización, pero la inferencia
+> es ~3× más lenta (~80 ms vs ~29 ms por frame). Para modo CPU se recomienda
+> reducir la resolución `--imgsz 480`.
 
 ## Limitaciones conocidas
 

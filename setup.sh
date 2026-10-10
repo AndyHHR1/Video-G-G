@@ -9,19 +9,22 @@ echo "  Rama: supuesto-ideal / tag: supuesto-ideal-v1.0"
 echo "  Directorio: $ROOT"
 echo "============================================================"
 
-# --- Verificar GPU NVIDIA con CUDA 12.8 ---
-if ! command -v nvidia-smi &>/dev/null; then
-    echo "[ERROR] No se detectó NVIDIA. Se requiere GPU con >= 6 GB VRAM."
-    echo "        El modelo YOLOv8 y MediaPipe necesitan aceleración por hardware."
-    echo "        En modo CPU el rendimiento no cumple RQNF01 (>30 FPS)."
-    exit 1
+# --- Detectar GPU NVIDIA ---
+HAS_NVIDIA=0
+GPU_NAME=""
+VRAM=0
+if command -v nvidia-smi &>/dev/null; then
+    HAS_NVIDIA=1
+    GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)
+    VRAM=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -1)
+    if [ "$VRAM" -lt 6000 ]; then
+        echo "[ADVERTENCIA] VRAM detectada: ${VRAM} MB. Recomendado >= 6 GB."
+    fi
+    echo "✓ GPU detectada: $GPU_NAME (${VRAM} MB VRAM)"
+else
+    echo "⚠ No se detectó NVIDIA. Se usará modo CPU (más lento)."
+    echo "  MediaPipe Pose ya corre en CPU por defecto."
 fi
-
-VRAM=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -1)
-if [ "$VRAM" -lt 6000 ]; then
-    echo "[ADVERTENCIA] VRAM detectada: ${VRAM} MB. El requisito mínimo es 6 GB (RQNF02)."
-fi
-echo "✓ GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader | head -1) (${VRAM} MB VRAM)"
 
 # --- Verificar Python 3.9+ ---
 if ! command -v python3 &>/dev/null; then
@@ -40,19 +43,26 @@ echo "✓ venv listo"
 
 PIP="$ROOT/venv/bin/pip"
 
-# --- Instalar PyTorch con CUDA 12.8 ---
+# --- Instalar PyTorch (CUDA o CPU según GPU) ---
 echo ""
-echo "Instalando PyTorch + CUDA 12.8 (compatible RTX 5050 / sm_120)..."
-$PIP install --index-url https://download.pytorch.org/whl/cu128 \
-    "torch==2.11.0+cu128" "torchvision==0.26.0+cu128" 2>&1 | tail -1
-echo "✓ PyTorch instalado"
+if [ "$HAS_NVIDIA" -eq 1 ]; then
+    echo "Instalando PyTorch + CUDA 12.8..."
+    $PIP install --extra-index-url https://download.pytorch.org/whl/cu128 \
+        "torch==2.11.0+cu128" "torchvision==0.26.0+cu128" 2>&1 | tail -1
+    echo "✓ PyTorch (CUDA) instalado"
+else
+    echo "Instalando PyTorch (CPU-only)..."
+    $PIP install --index-url https://download.pytorch.org/whl/cpu \
+        "torch==2.6.0+cpu" "torchvision==0.21.0+cpu" 2>&1 | tail -1
+    echo "✓ PyTorch (CPU) instalado"
+fi
 
 # --- Instalar dependencias (en orden para evitar conflicto protobuf/mediapipe) ---
 echo ""
 echo "Instalando dependencias..."
 echo "  (nota: mediapipe 0.10.21 requiere protobuf<5; se instala por separado)"
 
-# 1. Paquetes sin protobuf ni mediapipe
+# Paquetes comunes (sin torch/torchvision, ni protobuf/mediapipe)
 $PIP install \
     "ultralytics==8.4.170" \
     "opencv-python==4.10.0.84" \
@@ -63,7 +73,6 @@ $PIP install \
     "Flask==3.1.3" \
     "Werkzeug==3.1.5" \
     "imageio-ffmpeg==0.6.0" \
-    "onnxruntime-gpu==1.30.0" \
     "psutil==7.2.2" \
     "polars==1.44.2" \
     "polars-runtime-32==1.44.2" \
@@ -81,33 +90,36 @@ $PIP install \
     2>&1 | tail -1
 echo "  ✓ Paquetes principales instalados"
 
-# 2. MediaPipe + protobuf compatible (<5)
+# MediaPipe + protobuf compatible (<5)
 $PIP install "mediapipe==0.10.21" "protobuf>=4.25.3,<5" 2>&1 | tail -1
 echo "  ✓ MediaPipe + protobuf corregido"
 
-# 3. CUDA utilities
-$PIP install "cuda-bindings==12.9.7" "cuda-pathfinder==1.6.0" "triton==3.6.0" 2>&1 | tail -1
-echo "  ✓ CUDA utilities"
+# ONNX Runtime (GPU or CPU según detección)
+if [ "$HAS_NVIDIA" -eq 1 ]; then
+    $PIP install "onnxruntime-gpu==1.30.0" 2>&1 | tail -1
+else
+    $PIP install "onnxruntime==1.30.0" 2>&1 | tail -1
+fi
+echo "  ✓ ONNX Runtime"
+
+# CUDA utilities (solo si hay GPU)
+if [ "$HAS_NVIDIA" -eq 1 ]; then
+    $PIP install "cuda-bindings==12.9.7" "cuda-pathfinder==1.6.0" "triton==3.6.0" 2>&1 | tail -1
+    echo "  ✓ CUDA utilities"
+fi
 
 # --- Verificar modelos ---
 echo ""
 echo "Verificando modelos..."
 MISSING=""
 
-if [ ! -f "$ROOT/yolov8s.pt" ]; then
-    echo "  Descargando yolov8s.pt (COCO para obstáculos, 22MB)..."
-    $PIP install gdown 2>&1 | tail -1
-    # YOLOv8s COCO weights (22MB) - download from Ultralytics
-    $PIP run python -c "
-from ultralytics import YOLO; YOLO('yolov8s.pt')
-" 2>&1 | tail -2 || echo "  (Se descargará automáticamente al primer uso)"
-else
-    echo "  ✓ yolov8s.pt presente (22MB)"
+if [ -f "$ROOT/yolov8s.pt" ]; then
+    echo "  ✓ yolov8s.pt presente (modelo COCO para obstáculos)"
 fi
 
 if [ -f "$ROOT/runs/yolov8s_zoom/weights/best.pt" ]; then
     SIZE=$(du -h "$ROOT/runs/yolov8s_zoom/weights/best.pt" | cut -f1)
-    echo "  ✓ runs/yolov8s_zoom/weights/best.pt presente ($SIZE)"
+    echo "  ✓ runs/yolov8s_zoom/weights/best.pt presente ($SIZE, 6 clases)"
 else
     echo "  ⨯ best.pt no encontrado - entrenar con:"
     echo "    ./venv/bin/python scripts/train.py --set name=yolov8s_zoom"
@@ -117,7 +129,7 @@ fi
 # --- Datasets (info para el usuario) ---
 echo ""
 echo "Datasets:"
-echo "  stairs_fallhuman:  $( [ -d 'stairs_fallhuman' ] && echo '✓ presente' || echo '✗ clonar con: git clone https://huggingface.co/datasets/andres31416/stairs_fallhuman' )"
+echo "  stairs_fallhuman:  $( [ -d 'stairs_fallhuman' ] && echo '✓ presente' || echo '✗ clonar: git clone https://huggingface.co/datasets/andres31416/stairs_fallhuman' )"
 echo "  Le2i-raw:          $( [ -d 'datasets/_external/Le2i-raw' ] && echo '✓ presente' || echo '✗ descargar con: ./venv/bin/python scripts/prepare_le2i.py --help' )"
 echo "  Combined dataset:  $( [ -d 'datasets/combined' ] && echo '✓ generado' || echo '✗ generar con: ./venv/bin/python scripts/prepare_dataset.py --clean' )"
 
@@ -125,9 +137,15 @@ echo "  Combined dataset:  $( [ -d 'datasets/combined' ] && echo '✓ generado' 
 echo ""
 echo "============================================================"
 if [ -z "$MISSING" ]; then
-    echo "  ✓ LISTO - Inicie el servidor:"
+    DEVICE_FLAG="--device auto"
+    if [ "$HAS_NVIDIA" -eq 0 ]; then
+        DEVICE_FLAG="--device cpu"
+        echo "  ✓ LISTO (modo CPU) - Inicie el servidor:"
+    else
+        echo "  ✓ LISTO (modo GPU) - Inicie el servidor:"
+    fi
     echo ""
-    echo "  ./venv/bin/python app/server.py --host 127.0.0.1 --port 5000"
+    echo "  ./venv/bin/python app/server.py $DEVICE_FLAG --host 127.0.0.1 --port 5000"
     echo ""
     echo "  Abra: http://127.0.0.1:5000"
     echo "============================================================"

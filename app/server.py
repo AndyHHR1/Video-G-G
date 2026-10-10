@@ -122,7 +122,7 @@ class Inferencer:
     crea una vez al arrancar y attend todas las peticiones.
     """
 
-    def __init__(self, weights: str, device: int = 0,
+    def __init__(self, weights: str, device: int | str = "auto",
                  obstacle_weights: str = "yolov8s.pt", conf: float = 0.25):
         self._weights = weights
         self._device = device
@@ -147,6 +147,11 @@ class Inferencer:
 
     def _run(self) -> None:
         from ultralytics import YOLO
+        # Auto-detección de dispositivo: 'auto' usa CUDA si está disponible,
+        # 'cpu' fuerza uso del procesador.
+        if self._device == "auto":
+            import torch
+            self._device = 0 if torch.cuda.is_available() else "cpu"
         # el modelo se carga DENTRO del hilo: asi el contexto CUDA se crea y
         # queda ligado a este mismo hilo
         self._model = YOLO(self._weights)
@@ -1104,6 +1109,8 @@ def main() -> None:
     ap.add_argument("--obstacle-weights", default="yolov8s.pt",
                     help="Modelo COCO para RQF02 (1): obstaculos en la escalera")
     ap.add_argument("--debug", action="store_true")
+    ap.add_argument("--device", default="auto",
+                    help="Dispositivo: 'auto', 'cpu', 'cuda', o índice GPU (0, 1...)")
     args = ap.parse_args()
 
     weights = Path(args.weights)
@@ -1126,6 +1133,7 @@ def main() -> None:
     print(f"  pesos   : {weights.relative_to(ROOT) if weights.is_relative_to(ROOT) else weights}")
     print(f"  clases  : {len(names)} ({', '.join(names.values())})")
     print(f"  conf    : {args.conf}   imgsz: {args.imgsz}")
+    print(f"  device  : {args.device}")
     print(f"  URL     : http://{args.host}:{args.port}")
     print("=" * 60)
 
@@ -1134,6 +1142,7 @@ def main() -> None:
     _inferencer = Inferencer(
         str(weights), conf=args.conf,
         obstacle_weights=args.obstacle_weights,
+        device=args.device,
     )
     print("  modelo listo")
     app.run(host=args.host, port=args.port, debug=args.debug, threaded=True)

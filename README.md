@@ -73,6 +73,10 @@ python3 -m venv venv
 > ```
 >
 > Con las builds por defecto, torch cae a `sm < 120` y falla al ejecutar.
+>
+> **Funciona también sin GPU:** `setup.sh` detecta la ausencia de NVIDIA e
+> instala PyTorch CPU automáticamente. El servidor funciona con
+> `--device cpu` o `--device auto` (detecta CUDA si existe).
 
 ### Regenerar todo desde cero
 
@@ -208,9 +212,9 @@ reenlazar el contexto CUDA, lo que costaba 85 ms por frame frente a 37 ms.
 | RQF06 | Persistencia > 3 s | **DESVIACIÓN** — 1.2 s en rojo y 0.6 s en ámbar, por petición del usuario |
 | RQF07 | Alertas con evidencia | **CUMPLE** — metadatos + fotograma anotado con las cajas |
 | RQF08 | Panel de supervisión | **CUMPLE** — app web |
-| RQNF01 | ≥ 30 FPS | **PARCIAL** — motor 26.5 fps (pose_every=2), no alcanza 30 fps |
+| RQNF01 | ≥ 30 FPS | **PARCIAL** — 26.5 fps con GPU (pose_every=2); en CPU más lento (~7 fps) |
 | RQNF02 | Latencia < 500 ms | **CUMPLE** — ~42 ms por ciclo en cámara |
-| RQNF03 | VRAM ≥ 6 GB | **CUMPLE** — RTX 5050, 8.1 GB |
+| RQNF03 | VRAM ≥ 6 GB | **CUMPLE** (GPU) — RTX 5050, 8.1 GB; en CPU se requiere RAM ≥ 6 GB |
 | RQNF10 | mAP@0.5 > 75 % | **PARCIAL** — val 0.718, test 0.703 (por debajo del 75% global; clases de riesgo superan el umbral)
 | RQNF12 | Resiliencia a iluminación | **CUMPLE** — augmentations HSV reforzadas |
 | RQNF14 | Protección de datos personales | **CUMPLE** — rostros pixelados al guardar |

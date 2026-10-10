@@ -231,7 +231,7 @@ class RiskEngine:
         self,
         risk_weights: str,
         obstacle_weights: str = "yolov8s.pt",
-        device: int = 0,
+        device: int | str = "auto",
         conf: float = 0.25,
         enable_pose: bool = True,
         anonymize: bool = True,
@@ -273,6 +273,9 @@ class RiskEngine:
         self._last_obstacles: list = []
 
         # --- RQF02: detector de personas y escalera -----------------------
+        if device == "auto":
+            import torch
+            device = 0 if torch.cuda.is_available() else "cpu"
         self.det = YOLO(risk_weights)
         self.det.to(device)
         # nombres del modelo propio -> id, para saber que clase es cual
