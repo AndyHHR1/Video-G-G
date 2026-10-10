@@ -13,11 +13,17 @@ ESCUELA PROFESIONAL DE INGENIERÍA DE SISTEMAS E INTELIGENCIA ARTIFICIAL
 
 
 
-Sistema Inteligente para Prevención de Caídas y Riesgos en Escaleras Basado en Video con YOLOv8 y MediaPipe (V1)
+Sistema Inteligente para Prevención de Caídas y Riesgos en Escaleras Basado en Video con YOLOv8 y MediaPipe (V4)
 
 
 Estudiantes:
 Hermenegildo Rumiche, Andy Humberto
+Mendoza Avila, Jorge Luis
+Lopez Gonzalez, Jorge
+Coronel Ruiz, Brayan
+Cortez Acon Jonaiker Mirosevic
+Sifuentes Berrocal, Edy Anthony
+Pereda Obando, Luis Go
 
 
 Docente: 
@@ -76,14 +82,14 @@ Justificación del Criterio de Organización:	16
 1. Introducción
 La presente Especificación de Requisitos de Software (ERS) establece las bases técnicas, funcionales y de calidad para el diseño, desarrollo, evaluación y despliegue del software de percepción computacional orientado a la seguridad de tránsito peatonal y prevención de caídas en escaleras dentro del campus universitario.
 1.1. Propósito
-El propósito de este documento es definir de manera exhaustiva, formal y verificable los requisitos funcionales y no funcionales que rigen la construcción del "Sistema Inteligente para Prevención de Caídas y Riesgos en Escaleras Basado en Video con YOLOv8 y MediaPipe (V1)" en los accesos y tramos de escaleras de la Universidad Privada Antenor Orrego (UPAO).
+El propósito de este documento es definir de manera exhaustiva, formal y verificable los requisitos funcionales y no funcionales que rigen la construcción del "Sistema Inteligente para Prevención de Caídas y Riesgos en Escaleras Basado en Video con YOLOv8 y MediaPipe (V4)" en los accesos y tramos de escaleras de la Universidad Privada Antenor Orrego (UPAO).
 El documento está estructurado para servir como guía oficial a las siguientes audiencias:
 Equipo de Desarrollo e Ingeniería de Software: Constituye la especificación técnica de referencia para el diseño arquitectónico, estimación postural, entrenamiento de modelos visuales, desarrollo de componentes, pruebas de verificación y despliegue del sistema.
 Docente Evaluador del curso de Percepción Computacional (UPAO): Funciona como el instrumento formal de auditoría y evaluación técnica sobre la aplicación de modelos de calidad (ISO/IEC 25010), gestión de IA (ISO/IEC 42001) y estándares de ingeniería de requerimientos (IEEE 830).
 Personal de Seguridad y Supervisores de Campus: Representa la referencia funcional para los interesados (stakeholders) y usuarios finales respecto a los alcances de la herramienta de monitoreo de escaleras, despliegue de alertas tempranas y soporte a la prevención de caídas y tropiezos.
 1.2. Ámbito del Sistema
 1.2.1. Identificación del Sistema
-Nombre del Software: Sistema Inteligente para Prevención de Caídas y Riesgos en Escaleras Basado en Video con YOLOv8 y MediaPipe (V1)
+Nombre del Software: Sistema Inteligente para Prevención de Caídas y Riesgos en Escaleras Basado en Video con YOLOv8 y MediaPipe (V4)
 Tipo de Producto: Aplicación independiente (standalone) para procesamiento e inspección visual en tiempo real con aceleración por hardware (GPU).
 1.2.2. Alcance Operativo (Lo que el sistema HARÁ)
 Basado en las capacidades aprobadas en los Requisitos Funcionales (RQF01 al RQF08), el sistema realizará de manera automatizada las siguientes funciones:
@@ -117,7 +123,7 @@ Framework de estimación de pose esquelética en tiempo real para detección de 
 ERS
 Especificación de Requisitos de Software (documento normado por el estándar IEEE 830).
 FPS
-Frames Per Second / Fotogramas por Segundo (tasa de rendimiento de video. Requisito formal RQNF01: mínima 30 FPS; en V1 el motor mide 18-20 fps con personas).
+Frames Per Second / Fotogramas por Segundo (tasa de rendimiento de video. Requisito formal RQNF01: mínima 30 FPS; en V1 el motor mide 26.5 fps con personas).
 ISO/IEC 25010
 Estándar internacional que especifica el modelo de calidad del producto software en 9 características.
 Ley N.º 29733
@@ -182,7 +188,7 @@ Limitaciones del Hardware y Procesamiento:
 El procesamiento de los modelos de visión por computadora (YOLOv8 para objetos y MediaPipe Pose para estimación esquelética corporal) y el seguimiento espacial (algoritmo de seguimiento IoU propio) requiere obligatoriamente un entorno de ejecución con aceleración por hardware basado en GPU NVIDIA con capacidad mínima de 6 GB de VRAM.
 En la primera versión, el sistema está restringido al procesamiento de un único flujo continuo de video proveniente de una cámara fija instalada en un tramo de escalera.
 Operaciones Paralelas y Rendimiento en Tiempo Real:
-El sistema debe garantizar un procesamiento continuo en GPU a una tasa sostenida de al menos 30 FPS (requisito formal RQNF01). En la versión V1, el rendimiento real mide 18-20 fps con personas presentes (MediaPipe Pose en CPU es el cuello de botella, ~18 ms por frame); sin modo asíncrono se alcanzan ~18.6 fps. El requisito de 30 FPS no se cumple de forma sostenida en escenas con peatones.
+El sistema debe garantizar un procesamiento continuo en GPU a una tasa sostenida de al menos 30 FPS (requisito formal RQNF01). En la versión V1, el rendimiento real mide 26.5 fps con personas presentes (MediaPipe Pose en CPU es el cuello de botella, ~18 ms por frame); sin modo asíncrono se alcanzan ~20 fps. El requisito de 30 FPS no se cumple de forma sostenida en escenas con peatones.
 La latencia máxima permitida para la emisión de la alerta hacia el panel de supervisión no superará los 500 ms tras confirmarse la persistencia temporal del riesgo (tiempo mínimo según nivel: ALTO 1.2 s, MEDIO 0.6 s, con histéresis 1.0 s).
 Funciones de Auditoría y Control de Calidad del Software:
 Modelo de Calidad de Software: Evaluación de las características del producto según ISO/IEC 25010:2023 (marco general de la familia ISO/IEC 25000 SQuaRE), asegurando altos estándares de idoneidad funcional, fiabilidad, eficiencia en el rendimiento y capacidad de interacción.
@@ -480,7 +486,7 @@ Subsección IEEE 830:
 Descripción:
 El sistema debe procesar la señal de video de la escalera en tiempo real a una tasa de rendimiento mínima sostenida de treinta (30) fotogramas por segundo (FPS) en la GPU, garantizando la fluidez en el cálculo postural con MediaPipe y la detección con YOLOv8.
 
-Nota de cumplimiento (V1): El motor completo mide 18-20 fps con personas presentes (MediaPipe Pose en CPU es el cuello de botella, ~18 ms por frame). El requisito de 30 FPS no se cumple de forma sostenida en escenas con peatones. Sin modo asíncrono se alcanzan ~18.6 fps. La latencia de alerta (<500 ms) sí se cumple con holgura (~41 ms en async mode).
+Nota de cumplimiento (V1): El motor completo mide 26.5 fps con personas presentes (MediaPipe Pose en CPU es el cuello de botella, ~18 ms por frame). El requisito de 30 FPS no se cumple de forma sostenida en escenas con peatones. Sin modo asíncrono se alcanzan ~20 fps. La latencia de alerta (<500 ms) sí se cumple con holgura (~41 ms en async mode).
 
 
 Especificación de Requerimiento No Funcional
