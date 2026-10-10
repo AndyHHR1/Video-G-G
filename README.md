@@ -175,10 +175,13 @@ accesibles sin registro o por no aportar cajas:
   seguimiento con IoU + tolerancia a oclusión 1 s    RQF05
         │
         ▼
-  doble umbral 75 % pre-filtrado / 85 % confirma   RQF04
+  filtrado CONF_PREFILTER (0.75) / CONF_CONFIRM (0.85)  RQF04
         │
         ▼
-  persistencia ≥ 3 s continuos                     RQF06
+  UMBRAL DE ALERTA: CONF_ALERTA = 0.35   (desviación: no 0.75/0.85)
+        │
+        ▼
+  persistencia según severidad — ALTO 1.2 s, MEDIO 0.6 s  RQF06
         │
         ▼
   alerta con metadatos + evidencia anonimizada     RQF07 · RQNF14
@@ -205,8 +208,8 @@ reenlazar el contexto CUDA, lo que costaba 85 ms por frame frente a 37 ms.
 | RQF06 | Persistencia > 3 s | **DESVIACIÓN** — 1.2 s en rojo y 0.6 s en ámbar, por petición del usuario |
 | RQF07 | Alertas con evidencia | **CUMPLE** — metadatos + fotograma anotado con las cajas |
 | RQF08 | Panel de supervisión | **CUMPLE** — app web |
-| RQNF01 | ≥ 30 FPS | **PARCIAL** — motor 37 FPS, cámara en vivo ~20-24 fps |
-| RQNF02 | Latencia < 500 ms | **CUMPLE** — ~41 ms por ciclo en cámara |
+| RQNF01 | ≥ 30 FPS | **PARCIAL** — motor 26.5 fps (pose_every=2), no alcanza 30 fps |
+| RQNF02 | Latencia < 500 ms | **CUMPLE** — ~42 ms por ciclo en cámara |
 | RQNF03 | VRAM ≥ 6 GB | **CUMPLE** — RTX 5050, 8.1 GB |
 | RQNF10 | mAP@0.5 > 75 % | **PARCIAL** — val 0.718, test 0.703 (por debajo del 75% global; clases de riesgo superan el umbral)
 | RQNF12 | Resiliencia a iluminación | **CUMPLE** — augmentations HSV reforzadas |
