@@ -486,7 +486,7 @@ Subsección IEEE 830:
 Descripción:
 El sistema debe procesar la señal de video de la escalera en tiempo real a una tasa de rendimiento mínima sostenida de treinta (30) fotogramas por segundo (FPS) en la GPU, garantizando la fluidez en el cálculo postural con MediaPipe y la detección con YOLOv8.
 
-Nota de cumplimiento (V1): El motor completo mide 26.5 fps con personas presentes (MediaPipe Pose en CPU es el cuello de botella, ~18 ms por frame). El requisito de 30 FPS no se cumple de forma sostenida en escenas con peatones. Sin modo asíncrono se alcanzan ~20 fps. La latencia de alerta (<500 ms) sí se cumple con holgura (~41 ms en async mode).
+Nota de cumplimiento (V1): El motor completo mide 26.5 fps con personas presentes (MediaPipe Pose en CPU es el cuello de botella, ~18 ms por frame). El requisito de 30 FPS no se cumple de forma sostenida en escenas con peatones. Sin modo asíncrono se alcanzan ~20 fps. La latencia de alerta (<500 ms) sí se cumple con holgura (~42 ms en async mode).
 
 
 Especificación de Requerimiento No Funcional
@@ -939,11 +939,11 @@ El presente glosario consolida y define de forma precisa la terminología técni
 Término / Acrónimo
 Definición
 Algoritmo de seguimiento IoU (V1)
-Algoritmo de seguimiento multiobjeto en tiempo real (~30 líneas) que mantiene la identidad de peatones u objetos en la escalera asociando cajas delimitadoras de alta y baja confianza mediante IoU > 0.25 y OCCLUSION_SECONDS = 1.0. En la versión V1 del sistema se implementa de manera propia en lugar del ByteTrack de Ultralytics.
+Algoritmo de seguimiento multiobjeto en tiempo real (~30 líneas) que mantiene la identidad de peatones u objetos en la escalera asociando cajas delimitadoras de alta y baja confianza mediante IoU > 0.25 y OCCLUSION_SECONDS = 1.0. En la versión V1 del sistema se implementa de manera propia en lugar del ByteTrack de Ultralytics, para evitar el arrastre de estado interno entre llamadas.
 MediaPipe Pose
 Estimación de Pose Corporación en Tiempo Real. Framework que detecta keypoints anatómicos (manos, hombros, caderas, pies) para analizar la sujeción del pasamanos y cambios bruscos de postura/caídas en la escalera.
 FPS
-Frames Per Second (Fotogramas por Segundo). Tasa de rendimiento de procesamiento de video. En el proyecto se especifica un mínimo sostenido de 30 FPS.
+Frames Per Second (Fotogramas por Segundo). Tasa de rendimiento de procesamiento de video. En el proyecto se especifica un mínimo sostenido de 30 FPS; en V1 el motor mide 26.5 fps con personas (pose_every=2, MediaPipe Pose en CPU es el cuello de botella).
 ID de seguimiento
 Identificador único y persistente asignado a cada transeúnte u objeto detectado en la escalera a lo largo de la secuencia de video.
 ISO/IEC 25010
@@ -972,7 +972,7 @@ APÉNDICE B - Diagramas de Arquitectura y Pipeline de Datos
 El pipeline de procesamiento del sistema de percepción computacional para escaleras está estructurado en cuatro etapas consecutivas y desacopladas. La siguiente especificación técnica en texto estructurado define las entradas, transformaciones y salidas de cada módulo, sirviendo de base oficial para la arquitectura del sistema (V1).
 
 Arquitectura general (V1):
-- Frame (cámara / imagen / vídeo) → Inferencer (threading persistente, app/server.py:109) → RiskEngine.step() (app/risk_engine.py:971) → Panel de supervisión (Flask, server.py:1035).
+- Frame (cámara / imagen / vídeo) → Inferencer (threading persistente, app/server.py:110) → RiskEngine.step() (app/risk_engine.py:978) → Panel de supervisión (Flask, server.py:1063).
 - El Inferencer ejecuta en un hilo dedicado con cola; Flask atiende en multihilo (threaded=True). Cada hilo nuevo debe re-enlazar contexto CUDA (~82 ms vs ~29 ms). El modelo se carga dentro del hilo para que CUDA quede ligado a él (`Inferencer._run()`).
 
 Detalles de Entradas, Salidas y Procesamiento por Etapa
@@ -988,12 +988,12 @@ Salida: Cajas delimitadoras de objetos, keypoints posturales de transeúntes, ca
 
 3. Etapa 3: Seguimiento Espacio-Temporal y Evaluación de Riesgo
 Entrada: Cajas delimitadoras, categorías de riesgo y puntajes de confianza emitidos en la Etapa 2.
-Procesamiento: Ejecución del algoritmo de seguimiento IoU propio (~30 líneas, IoU > 0.25 para asociar detecciones con tracks vivos; OCCLUSION_SECONDS = 1.0) para mantener la identidad única (ID) de cada persona u objeto en la escalera (RQF05). Evaluación de la persistencia temporal de conductas de riesgo con umbrales por nivel — PERSIST_SECONDS = {"ALTO": 1.2, "MEDIO": 0.6}, PERSIST_GRACE = 1.0 s de histéresis, ALERT_COOLDOWN = 15.0 s — con confirmación al 85% (RQF06), o detección inmediata en caso de caída activa. Se incluyeanonimización de rostros mediante MediaPipe Face Detection (pixelación 1/12) antes de guardar evidencia (RQNF14, Ley 29733).
+Procesamiento: Ejecución del algoritmo de seguimiento IoU propio (~30 líneas, IoU > 0.25 para asociar detecciones con tracks vivos; OCCLUSION_SECONDS = 1.0) para mantener la identidad única (ID) de cada persona u objeto en la escalera (RQF05). Evaluación de la persistencia temporal de conductas de riesgo con umbrales por nivel — PERSIST_SECONDS = {"ALTO": 1.2, "MEDIO": 0.6}, PERSIST_GRACE = 1.0 s de histéresis, ALERT_COOLDOWN = 15.0 s — con confirmación al 85% (RQF06), o detección inmediata en caso de caída activa. Nota: el umbral del 85% de RQF04 NO actúa como puerta de alertas: en este modelo las detecciones de persona caen entre 0.2 y 0.9, de modo que con 0.85 no se emitiría ninguna alerta; se usa CONF_ALERTA = 0.35 como umbral de disparo de alerta. La cadencia de inferencia se controla con parámetros de frecuencia: pose_every=2 (MediaPipe Pose), people_every=3 (detección de personas), obstacle_every=15 (detección de obstáculos), stairs_every=12 (detección de escalera), classify_every=4 (clasificación postural). Se incluye anonimización de rostros mediante MediaPipe Face Detection (pixelación 1/12) antes de guardar evidencia (RQNF14, Ley 29733).
 Salida: Estructura de evento de alerta confirmada que vincula el ID de seguimiento, la categoría de riesgo en escalera, marca de tiempo, captura del fotograma como evidencia y (opcional) clip de audio de 0.5 s antes → 0.5 s después (RQNF-AUDIO).
 
 4. Etapa 4: Gestión y Notificación de Alertas
 Entrada: Estructura de evento de alerta confirmada.
-Procesamiento: Empaquetado de los datos del incidente, registro inalterable en el historial auditable de eventos (alertas.jsonl + fotograma anotado en runs/alertas/<AAAA-MM-DD>/, conforme a RQNF16), extracción de audio sincronizado (RQNF-AUDIO) y transmisión inmediata del paquete de datos hacia la interfaz visual.
+Procesamiento: Empaquetado de los datos del incidente, registro inalterable en el historial auditable de eventos (alertas.jsonl + fotograma anotado en runs/alerts/<AAAA-MM-DD>/, conforme a RQNF16), extracción de audio sincronizado (RQNF-AUDIO) y transmisión inmediata del paquete de datos hacia la interfaz visual.
 Salida: Despliegue visual de la alerta en el panel de supervisión (RQF08) con una latencia total menor a 500 ms (RQNF02). El panel muestra estado operativo (OPERATIVO / DEGRADADO / NO OPERATIVO), refresco cada 3 s, y autenticación por PANEL_TOKEN (RQNF19).
 APÉNDICE C - Matriz de Trazabilidad Completa
 La siguiente matriz consolida la totalidad de los 35 requisitos especificados para el proyecto (8 Requisitos Funcionales y 27 Requisitos No Funcionales), estableciendo la trazabilidad directa entre la característica/subcaracterística de origen de la norma ISO/IEC 25010 y la subsección correspondiente del estándar IEEE 830:
