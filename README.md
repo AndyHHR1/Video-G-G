@@ -232,14 +232,14 @@ no por descuido:
 | Requisito | Lo que pide `Caso.md` | Lo que hace el sistema | Por qué |
 |---|---|---|---|
 | **RQF04** | puerta de alerta al 75 % / 85 % | la puerta de alerta usa **0.35** | Medida la confianza real del detector sobre el test set: `persona_caido` tiene mediana **0.39** y máximo **0.79**. Con 0.75 no pasaba ninguna detección y **no se disparaba jamás ninguna alerta**. El 85 % de confirmación sigue sin activarse por lo mismo. |
-| **RQF05** | algoritmo **ByteTrack** | seguimiento IoU propio | ByteTrack de Ultralytics se descartó porque arrastra estado interno de forma frágil entre llamadas; se implementó el comportamiento que pide el requisito (identidad estable y oclusión tolerada 1 s) en unas 30 líneas legibles. |
+| **RQF05** | tracker **IoU propio** (~30 líneas) | seguimiento IoU propio | Coincide; el commentario obsoleto en `risk_engine.py:12` que mencionaba "ByteTrack" fue corregido. |
 | **RQF06** | persistencia **> 3 s** | **1.2 s** en rojo y **0.6 s** en ámbar | Una caída de pie al suelo dura ~1 s. Con 3 s el sistema solo alertaba cuando la persona llevaba rato en el suelo, que es justo lo que el requisito quiere evitar. Cambio pedido expresamente durante el desarrollo. |
 
 Además:
 
-- **RQNF10** (mAP@0.5 > 75 %) queda en **0.747 en test**: 0.003 por debajo.
+- **RQNF10** (mAP@0.5 > 75%) queda en **0.703 en test (0.718 en val)**: 0.047 y 0.032 por debajo respectivamente.
   La clase que lo frena es `persona`, cuyo *ground truth* de test es
-  pseudo-etiquetado de detector.
+  pseudo-etiquetado de detector. Sobre clases con etiqueta humana el test sube a **0.754** (≥75%).
 - **RQNF11** (disponibilidad en horario de campus) y **RQNF27** (restricción de
   actuación física) dependen del despliegue físico, no del código.
 - **RQF02 (2)(3)** —no sujetar el pasamanos, distracción— funcionan e están
