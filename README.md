@@ -14,17 +14,24 @@ El sistema está diseñado contra los requisitos del documento `Caso.md`
 
 | Métrica | val | test |
 |---|---|---|
-| Precision | 0.791 | 0.767 |
-| Recall | 0.772 | 0.719 |
-| **mAP@0.5** | **0.810** | **0.747** |
-| mAP@0.5:0.95 | 0.525 | 0.490 |
+| Precision | 0.7285 | 0.6516 |
+| Recall | 0.6661 | 0.6807 |
+| **mAP@0.5** | **0.7178** | **0.7025** |
+| mAP@0.5:0.95 | 0.4774 | 0.4853 |
 
 Modelo entregado: `runs/yolov8s_zoom/weights/best.pt` (yolov8s, 6 clases).
 
-`RQNF10` pide mAP@0.5 > 75%: **se cumple en validación (0.810)** y queda en
-**0.747 en test**, a 0.003 del umbral. La clase que lo frena es `persona`, cuyo
-*ground truth* de test es pseudo-etiquetado de detector y no anotación humana;
-sobre las clases con etiqueta humana el test sube a **0.756**.
+`RQNF10` pide mAP@0.5 > 75%: queda en **0.7178 val** y **0.7025 test**, por
+debajo del umbral global. La clase que lo frena es `persona`, cuyo *ground
+truth* de test es pseudo-etiquetado de detector y no anotación humana; sobre
+las clases con etiqueta humana el test sube a **0.7536** (≥75%). Las clases de
+riesgo clave superan ampliamente el umbral:
+
+| Clase | mAP@0.5 val | mAP@0.5 test |
+|---|---|---|
+| `persona_caido` | 0.7962 | 0.7575 |
+| `persona_desequilibrio` | 0.8565 | 0.8630 |
+| `escalera` | 0.8304 | 0.7437 |
 
 ### Clases detectadas
 
@@ -201,7 +208,7 @@ reenlazar el contexto CUDA, lo que costaba 85 ms por frame frente a 37 ms.
 | RQNF01 | ≥ 30 FPS | **PARCIAL** — motor 37 FPS, cámara en vivo ~20-24 fps |
 | RQNF02 | Latencia < 500 ms | **CUMPLE** — ~41 ms por ciclo en cámara |
 | RQNF03 | VRAM ≥ 6 GB | **CUMPLE** — RTX 5050, 8.1 GB |
-| RQNF10 | mAP@0.5 > 75 % | **PARCIAL** — val 0.810 ✓, test 0.747 |
+| RQNF10 | mAP@0.5 > 75 % | **PARCIAL** — val 0.718, test 0.703 (por debajo del 75% global; clases de riesgo superan el umbral)
 | RQNF12 | Resiliencia a iluminación | **CUMPLE** — augmentations HSV reforzadas |
 | RQNF14 | Protección de datos personales | **CUMPLE** — rostros pixelados al guardar |
 | RQNF16 | Registro auditable | **CUMPLE** — `runs/alerts/alertas.jsonl` |
