@@ -976,11 +976,17 @@ def api_video():
 
 
 def _mjpeg(camera_index: int, conf: float, imgsz: int):
-    """Stream de la webcam: captura a full fps (drop de frames viejos si el
-    worker se atrasa) y sirve SIEMPRE el ultimo resultado anotado por el hilo
-    trabajador, sin bloquear en FBF. En vivo se salta Real-ESRGAN
-    (``peek(..., skip_sr=True)``) para que la deteccion sea en tiempo real;
-    la SR 4× queda en /api/detect, /api/frame y /api/video con --esrgan.
+    """Stream de la webcam: fluido Y con super-resolucion 4× activa.
+
+    Antes era FBF bloqueante (inferencia por frame) y quedaba ~2 fps. Ahora:
+    captura a full fps, el worker persistente hace deteccion + Real-ESRGAN 4×
+    (modo calidad, hasta 320→1280) de forma ASYNC sobre el frame mas
+    reciente, descartando los intermedios (drop de cola) para no ahogar GPU.
+    El stream no espera al worker: repite el ultimo frame anotado + SR a la
+    tasa de captura (~30 fps) hasta que llegue el siguiente, de modo que el
+    video que ve el usuario es SIEMPRE el super-resuelto y se mueve fluido.
+    Latencia: ~tiempo de SR por frame (cumple < 7 s). La SR calidad tambien
+    sirve en /api/detect, /api/frame y /api/video.
     """
     cap = cv2.VideoCapture(camera_index)
     if not cap.isOpened():
@@ -993,7 +999,7 @@ def _mjpeg(camera_index: int, conf: float, imgsz: int):
             ok, frame = cap.read()
             if not ok:
                 break
-            res = _inferencer.peek(frame, conf, imgsz, fast=True, skip_sr=True)
+            res = _inferencer.peek(frame, conf, imgsz, fast=False, skip_sr=False)
             if res is None:
                 annotated = frame.copy()
                 dets, result = [], None
@@ -1007,7 +1013,7 @@ def _mjpeg(camera_index: int, conf: float, imgsz: int):
 
             annotate_status(annotated, dets, fps, result)
 
-            frame_bytes = encode_jpeg(annotated, quality=75)
+            frame_bytes = encode_jpeg(annotated, quality=80)
             yield (
                 b"--frame\r\n"
                 b"Content-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n"
