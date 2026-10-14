@@ -975,51 +975,171 @@ def api_video():
     )
 
 
-def _mjpeg(camera_index: int, conf: float, imgsz: int):
-    """Stream de la webcam: fluido Y con super-resolucion 4× activa.
+def _init_trackers(frame: np.ndarray, dets: list[dict]) -> list[dict]:
+    """Crea un tracker CSRT por deteccion con bbox valido."""
+    trs = []
+    for d in dets:
+        x1, y1, x2, y2 = d["bbox"]
+        if (x2 - x1) <= 0 or (y2 - y1) <= 0:
+            continue
+        tr = cv2.TrackerCSRT_create()
+        tr.init(frame, (int(x1), int(y1), int(x2 - x1), int(y2 - y1)))
+        trs.append({"tr": tr, "class_id": d.get("class_id"),
+                    "class_name": d.get("class_name", "objeto"),
+                    "confidence": d.get("confidence", 0.0),
+                    "risk": d.get("riesgo", "NEUTRO")})
+    return trs
 
-    Antes era FBF bloqueante (inferencia por frame) y quedaba ~2 fps. Ahora:
-    captura a full fps, el worker persistente hace deteccion + Real-ESRGAN 4×
-    (modo calidad, hasta 320→1280) de forma ASYNC sobre el frame mas
-    reciente, descartando los intermedios (drop de cola) para no ahogar GPU.
-    El stream no espera al worker: repite el ultimo frame anotado + SR a la
-    tasa de captura (~30 fps) hasta que llegue el siguiente, de modo que el
-    video que ve el usuario es SIEMPRE el super-resuelto y se mueve fluido.
-    Latencia: ~tiempo de SR por frame (cumple < 7 s). La SR calidad tambien
-    sirve en /api/detect, /api/frame y /api/video.
+
+def _update_trackers(frame: np.ndarray, trs: list[dict]) -> list[dict]:
+    """Avanza los trackers sobre el frame nativo y dibuja/devuelve detecciones."""
+    out = []
+    for tk in trs:
+        ok_t, bb = tk["tr"].update(frame)
+        if not ok_t:
+            continue
+        x, y, w, h = (int(v) for v in bb)
+        info = CLASS_INFO.get(tk.get("class_id"),
+                              {"name": tk.get("class_name", "objeto"),
+                               "color": (0, 200, 0), "risk": "NEUTRO"})
+        color = RISK_COLOR.get(tk.get("risk"), info["color"])
+        cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
+        label = f'{info["name"]} {tk.get("confidence", 0):.0%} #{tk.get("class_id")}'
+        (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)
+        cv2.rectangle(frame, (x, y - th - 6), (x + tw + 8, y), color, -1)
+        cv2.putText(frame, label, (x + 4, y - 5), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5, (20, 20, 20), 2, cv2.LINE_AA)
+        out.append({"class_id": tk.get("class_id"),
+                    "class_name": info["name"],
+                    "confidence": tk.get("confidence", 0.0),
+                    "risk": tk.get("risk", "NEUTRO"),
+                    "bbox": [x, y, x + w, y + h]})
+    return out
+
+
+class LiveFeed:
+    """Camara en vivo fluida (no FBF): hilo captura/deteccion/tracking a fps de
+    camara; el render MJPEG solo lee el ultimo frame anotado a ~30 fps.
+
+    La deteccion (YOLO, SIN SR) corre cada K frames; entre medias los objetos
+    se trackinguean con CSRT sobre frames nativos -> fluidez de camara real.
+    Real-ESRGAN queda fuera del en vivo; sigue en /api/detect, /api/frame y
+    /api/video con --esgran. La inferencia pesada va por el worker
+    persistente (contexto CUDA ligado) y SOLO cada K frames, por lo que el
+    render nunca se bloquea.
+
+    Con --esgran: la SR 4× (fast) se aplica SOLO cada K frames sobre el worker
+    y el render repite (hold) el frame mejorado a ~30 fps -> el usuario ve
+    video super-resuelto y fluido (sin FBF); bboxes se renuevan cada K
+    (latencia < 7 s para K=8). Sin --esgran: deteccion nativa + tracking CSRT
+    a full fps. La SR calidad sigue en /api/detect, /api/frame, /api/video.
     """
-    cap = cv2.VideoCapture(camera_index)
-    if not cap.isOpened():
-        yield b""
-        return
-    
-    fps_t, fps_n, fps = time.perf_counter(), 0, 0.0
-    try:
-        while True:
+
+    TRACK_K = 8
+
+    def __init__(self):
+        self._thread = None
+        self._stop = None
+        self._last = None
+        self._use_sr = False
+        self._lock = threading.Lock()
+
+    def latest(self):
+        with self._lock:
+            return self._last
+
+    def _loop(self, cam, conf, imgsz):
+        cap = cv2.VideoCapture(cam)
+        if not cap.isOpened():
+            with self._lock:
+                self._last = None
+            return
+        trs = []
+        i = 0
+        while not (self._stop and self._stop.is_set()):
             ok, frame = cap.read()
             if not ok:
                 break
-            res = _inferencer.peek(frame, conf, imgsz, fast=False, skip_sr=False)
-            if res is None:
-                annotated = frame.copy()
-                dets, result = [], None
+            i += 1
+            if self._use_sr:
+                # SR es pesada: se aplica SOLO cada K frames; el render MJPEG
+                # repite (hold) el ultimo frame mejorado a ~30 fps. El usuario
+                # ve el video super-resuelto y sigue fluido (sin FBF).
+                if (i % self.TRACK_K) == 0 or self._last is None:
+                    annotated, result, dets, _t = _inferencer.detect(
+                        frame, conf, imgsz, draw=True, skip_sr=False, fast=True)
+                    with self._lock:
+                        self._last = (annotated, dets, result)
+                # sino: se repite self._last sin hacer nada
             else:
-                annotated, result, dets, _t = res
+                if (i % self.TRACK_K) == 0 or not trs:
+                    annotated, result, dets, _t = _inferencer.detect(
+                        frame, conf, imgsz, draw=True, skip_sr=True, fast=True)
+                    trs = _init_trackers(frame, dets)
+                    rendered = annotated
+                else:
+                    rendered = frame.copy()
+                    dets = _update_trackers(rendered, trs)
+                    result = None
+                with self._lock:
+                    self._last = (rendered, dets, result)
+        cap.release()
+        with self._lock:
+            self._last = None
+
+    def start(self, cam, conf, imgsz):
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._stop = threading.Event()
+        self._use_sr = _inferencer._esgrana is not None
+        self._thread = threading.Thread(
+            target=self._loop, args=(cam, conf, imgsz), daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        if self._stop is not None:
+            self._stop.set()
+        self._thread = None
+
+
+_live_feed = LiveFeed()
+
+
+def _mjpeg(camera_index: int, conf: float, imgsz: int):
+    """Render del stream de la webcam a ~30 fps (fluido como camara real).
+
+    Antes era FBF: se hacía inferencia + SR por cada frame en el hilo de la
+    peticion, quedando ~1.5-2 fps. Ahora la captura/deteccion/tracking corren
+    en LiveFeed (hilo aparte) y este generador solo sirve el ultimo frame
+    anotado a fluidez de camara; la inferencia pesada es esporadica (cada K
+    frames) y NUNCA bloquea el stream.
+    """
+    if _inferencer is None or not _inferencer._ready.is_set():
+        yield b""
+        return
+    _live_feed.start(camera_index, conf, imgsz)
+    fps_t, fps_n, fps = time.perf_counter(), 0, 0.0
+    try:
+        while True:
+            res = _live_feed.latest()
+            if res is None:
+                time.sleep(0.05)
+                continue
+            annotated, dets, result = res
             fps_n += 1
             elapsed = time.perf_counter() - fps_t
             if elapsed >= 0.5:
                 fps = fps_n / elapsed
                 fps_n, fps_t = 0, time.perf_counter()
-
             annotate_status(annotated, dets, fps, result)
-
-            frame_bytes = encode_jpeg(annotated, quality=80)
+            frame_bytes = encode_jpeg(annotated, quality=75)
             yield (
                 b"--frame\r\n"
                 b"Content-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n"
             )
+            time.sleep(1 / 30)
     finally:
-        cap.release()
+        _live_feed.stop()
 
 
 @app.get("/api/stream")
