@@ -134,6 +134,10 @@ VRAM
 Memoria de acceso aleatorio de video de la GPU (requerimiento mínimo de 6 GB).
 YOLOv8
 Modelo de red neuronal convolucional estado del arte para detección y segmentación de objetos en tiempo real.
+Real-ESRGAN
+Modelo de IA de superresolución basado en GANs (Generative Adversarial Network) que reconstruye una imagen 4× mayor a partir de una de baja resolución sintetizando textura y bordes reales (no estira píxeles). Modelo ONNX `real_esrgan_x4.onnx` del espacio HuggingFace `SceneWorks/real-esrgan-onnx`, convertido a PyTorch FX para inferir en CUDA. Ver 3.2.2.5.
+Superresolución (SR)
+Preprocesamiento opcional (-extra RQNF03) que amplía 4× la señal de cámara/video antes de la detección: entrada 112 px en vivo (~90 ms) o 320 px imagen/vídeo (~463 ms), con salida ≤1280 px. Mejora la nitidez de bordes (~2.3× el Laplacian de un resize bilineal) y reduce falsos negativos en obstáculos pequeños.
 
 1.4. Referencias
 El presente documento de especificación de requisitos se fundamenta y mantiene trazabilidad con las siguientes fuentes normativas, legales y datasets de referencia:
@@ -409,6 +413,59 @@ Subsección IEEE 830:
 3.2.2 Análisis de Visión por Computadora e Inferencia
 Descripción:
 El sistema debe aplicar un filtro de decisión basado en umbrales de confianza (confidence threshold) para descartar detecciones con baja certeza matemática, estableciendo un umbral mínimo configurable (por defecto 75% para pre-filtrado de detección y 85% para confirmación de alerta).
+
+
+3.2.2.5 Preprocesamiento de superresolución con Real-ESRGAN (-extra RQNF03)
+
+
+**¿Qué es?**
+
+Real-ESRGAN es una técnica de **superresolución**: parte de una imagen o
+fotograma de baja resolución y la reproduce a **4×** mayor resolución
+**reconstruyendo detalle real**, no estirando píxeles. Se entrena con una **GAN**
+(*Generative Adversarial Network*): un *generador* produce la imagen ampliada y
+un *discriminador* actúa como crítico que exige que el resultado "parezca una
+foto verdadera". Por eso la salida gana nitidez de verdad (rango dinámico
+completo 0–255) y no el grisáceo que producía la antigua normalización a [-1,1].
+
+**Analogía (para no especialistas):** es como entregar a un artista un boceto
+borroso y pedirle que lo redibuje 4 veces más grande y nítido. El artista no
+copia píxel por píxel; **averigua qué había** tras el borrón (texturas, sombras,
+bordes) y los rellena. El discriminador es el "crítico" que le exige realismo.
+Al estar entrenado viviendo miles de fotos reales, el modelo "sabe" cómo se
+ven detalles finos (pelo, ropa, la textura de un escalón) y los sintetiza en la
+ampliación.
+
+**Cómo funciona en este sistema (pipeline):**
+
+1. El frame bajo se reduce a un tamaño manejable manteniendo la relación de
+   aspecto: **112 px** en cámara en vivo (prioridad a fluidez, ~90 ms) o
+   **320 px** en imagen/vídeo (prioridad a nitidez, ~463 ms). Antes se
+   aplastaba a un cuadrado 224×224 y se distorsionía 16:9; preservar el aspecto
+   eleva el Laplacian ~2.3× (56 → 103) y evita marcos grises.
+2. El modelo (red residual + cabeza de ESRGAN) genera una salida 4× mayor
+   (112→448, 320→1280).
+3. La salida se cierra a **1280 px** de lado (`_MAX_OUTPUT`) para no agotar VRAM
+   ni saturar el codificador JPEG (una foto 4K a 4× → 16K es inviable).
+4. Un *unsharp* leve restituye el contraste local de bordes.
+5. La SR **precede** a la detección: bordes de ropa, pendientes y raíces sobre
+   el escalón se vuelven legibles para YOLOv8, reduciendo falsos negativos en
+   obstáculos pequeños (RQF02).
+
+**¿Por qué no onnxruntime ni PyTorch JIT?** El ONNX público de Real-ESRGAN
+lleva el nodo `Resize` con los `scales` en el slot de `roi` (bug de exportación
+opset ≥13), lo que cuelga onnxruntime y `cv2.dnn`. Además `realesrgan`/`basicsr`
+importa `torchvision.transforms.functional_tensor`, borrado en torchvision 0.26.
+Por eso `app/real_esrgan.py` convierte ONNX → PyTorch **FX** con `onnx2torch`
+(cacheado a nivel de clase) e inferencia en CUDA.
+
+**Créditos y atribución:**
+
+- *Paper*: **Real-ESRGAN: Real-World Super-Resolution via Generative Adversarial
+  Networks**, X. Wang et al., 2022.
+- *Implementación*: **xinntao/Real-ESRGAN** — licencia **AGPL-3.0**.
+- *Modelo ONNX*: `real_esrgan_x4.onnx` del espacio HuggingFace
+  **SceneWorks/real-esrgan-onnx**, descargado por `app/build_esrgan.py`.
 
 3.2.3. Seguimiento Espacio-Temporal y Evaluación de Riesgo
 Especificación de Requerimiento Funcional

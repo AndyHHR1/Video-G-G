@@ -1,7 +1,8 @@
 # Prevención de Caídas y Riesgos en Escaleras
 
 Detector de riesgo de caídas en escaleras con **YOLOv8** (Ultralytics),
-**MediaPipe Pose** y un segundo detector COCO para obstáculos, más una
+**MediaPipe Pose** y un segundo detector COCO para obstáculos, superresolución
+4× con **Real-ESRGAN** (preprocesamiento opcional, `--esgran`), y una
 plataforma web local para probarlo con imagen, vídeo o cámara en vivo.
 
 El sistema está diseñado contra los requisitos del documento `Caso.md`
@@ -200,6 +201,58 @@ reenlazar el contexto CUDA, lo que costaba 85 ms por frame frente a 37 ms.
 
 ---
 
+## Superresolución 4× con Real-ESRGAN (RQNF03-extra)
+
+**Real-ESRGAN** es una técnica de **superresolución**: toma una imagen o video de
+baja resolución y la reproduce a **4×** mayor resolución **reconstruyendo
+detalles reales**, no estirando píxeles. Se entrena con una **GAN** (*Generative
+Adversarial Network*): un *generador* produce la imagen ampliada y un
+*discriminador* actúa como crítico que exige que el resultado "parezca una foto
+verdadera", de ahí que gane nitidez de verdad (rango dinámico 0–255) y no el
+grisáceo que producía la antigua normalización a [-1,1].
+
+**Analogía (para no especialistas):** como si se le diera a un artista un boceto
+borroso y se le pidiera que lo redibuje 4 veces más grande y nítido. El artista no
+copia píxel por píxel; **averigua qué había** tras el borrón (texturas, sombras,
+bordes) y los rellena. El discriminador es el "crítico" que exige realismo.
+
+**Pipeline (`app/real_esrgan.py`):**
+
+1. El frame bajo se reduce manteniendo la relación de aspecto: **112 px** en cámara
+   en vivo (~90 ms) o **320 px** en imagen/vídeo (~463 ms). Antes se aplastaba a
+   224×224 y distorsionaba 16:9 (Laplacian 56 → 103 al preservar aspecto).
+2. El modelo (red residual ESRGAN) genera la salida 4× (112→448, 320→1280).
+3. La salida se cierra a **1280 px** (`_MAX_OUTPUT`): una foto 4K a 4× → 16K
+   agota VRAM y el codificador JPEG.
+4. *Unsharp* leve restituye el contraste local. La SR **precede** a la detección:
+   YOLOv8 trabaja sobre bordes reconstruidos (menos falsos negativos en
+   obstáculos pequeños, RQF02) y el frontend dibuja la SR sobre el canvas en
+   base64 (cámara en vivo) o hex (upload).
+
+**¿Por qué no onnxruntime ni PyTorch JIT?** El ONNX público de Real-ESRGAN lleva el
+nodo `Resize` con `scales` en el slot de `roi` (bug de exportación, opset ≥13),
+lo que cuelga onnxruntime y `cv2.dnn`. Además `realesrgan`/`basicsr` importa
+`torchvision.transforms.functional_tensor`, borrado en torchvision 0.26. Por eso
+se convierte ONNX → **PyTorch FX** con `onnx2torch` (cacheado a nivel de clase) e
+infiere en CUDA; el uso de `torch.jit` está descartado por `sm_120`.
+
+**Alternativas de velocidad (modo cámara):** el flag `#fast`/async deja el live a
+~5 fps. Si la fluidez importa más que la nitidez, se puede forzar `fast=True`
+(112 px, ~90 ms) desde el frontend; por defecto se prioriza calidad.
+
+**Créditos y atribución:**
+
+- *Paper*: **Real-ESRGAN: Real-World Super-Resolution via Generative Adversarial
+  Networks**, X. Wang et al., 2022.
+- *Implementación*: **xinntao/Real-ESRGAN** — licencia **AGPL-3.0**.
+- *Modelo ONNX*: `real_esrgan_x4.onnx` del espacio HuggingFace
+  **SceneWorks/real-esrgan-onnx**, descargado por `app/build_esrgan.py`.
+
+El flag **`--esgran`** (o `--esrgan`, aceptado por `argparse`) activa el paso; sin
+él el pipeline omite la SR y trabaja a resolución nativa.
+
+---
+
 ## Cumplimiento de requisitos
 
 | Requisito | Descripción | Estado |
@@ -347,6 +400,8 @@ alertas son solo de vídeo y cámara en vivo.
 └── app/
     ├── server.py            servidor Flask + hilo trabajador
     ├── risk_engine.py       motor de riesgo (RQF02-RQF07) y alertas
+    ├── real_esrgan.py       superresolución 4× Real-ESRGAN (ONNX→PyTorch FX)
+    ├── build_esrgan.py      descarga del modelo ONNX (HuggingFace)
     └── templates/           interfaz (index, login)
 ```
 
