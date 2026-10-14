@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - "supuesto-ideal-v*"
+      - "esrgan-previo-v*"
   workflow_dispatch:
 
 permissions:
@@ -11,6 +12,7 @@ permissions:
 
 jobs:
   create_release:
+    if: startsWith(github.ref_name, 'supuesto-ideal-v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -27,3 +29,24 @@ jobs:
             runs/yolov8s_zoom/weights/best.pt
             yolov8s.pt
             setup.sh
+
+  # Real-ESRGAN (semana 7): superresolución 4× en vivo. No toca el release
+  # "Supuesto Ideal": este job solo corre en tags esrgan-previo-v*.
+  create_esgrna_release:
+    if: startsWith(github.ref_name, 'esrgan-previo-v')
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create Real-ESGRAN Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Versión con mejora de video real_esrgan_x4 pre correcciones (Por si quema este proyecto)
+          generate_release_notes: true
+          files: |
+            app/real_esgru.py
+            app/build_esgru.py
+            setup.sh
+            requirements.txt
