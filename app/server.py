@@ -195,7 +195,8 @@ class Inferencer:
                         draw=not out.get("no_draw", False),
                         force=out.get("force", False),
                         allow_alerts=out.get("allow_alerts", True),
-                        fast=out.get("fast", False))
+                        fast=out.get("fast", False),
+                        skip_sr=out.get("skip_sr", False))
                     # El ultimo resultado se guarda SIEMPRE, no solo en modo
                     # asincrono. Antes se guardaba bajo `if self._async`, pero
                     # la peticion restaura `_async = False` en su `finally`
@@ -221,7 +222,7 @@ class Inferencer:
                 out["done"].set()
 
     def _job(self, image, conf, imgsz, draw=True, force=False,
-             allow_alerts=True, fast=False):
+             allow_alerts=True, fast=False, skip_sr=False):
         """Motor completo + dibujo, ambos dentro del hilo trabajador.
 
         El dibujo tambien se hace aqui a proposito: medir en esta maquina
@@ -236,7 +237,7 @@ class Inferencer:
         # Super-resolución 4× (RQNF03-extra): opcional, aplicada ANTES de la
         # detección para que las bboxes coincidan con el frame escalado y el
         # dibujo posterior sea consistente.
-        if self._esrgan is not None:
+        if self._esrgan is not None and not skip_sr:
             image = self._esrgan.enhance(image, fast=fast)
         result = self._engine.step(image, force=force,
                                    allow_alerts=allow_alerts)
@@ -282,7 +283,8 @@ class Inferencer:
         self._async = on
 
     def detect(self, image: np.ndarray, conf: float, imgsz: int, draw: bool = True,
-               force: bool = False, allow_alerts: bool = True, fast: bool = False):
+               force: bool = False, allow_alerts: bool = True, fast: bool = False,
+               skip_sr: bool = False):
         """Encola el trabajo y espera el resultado.
 
         En modo asincrono devuelve de inmediato el ultimo resultado disponible
@@ -294,7 +296,7 @@ class Inferencer:
         calidad (hasta 160 px) para que la salida 4× se vea nítida.
         """
         out = {"done": threading.Event(), "no_draw": not draw, "force": force,
-               "allow_alerts": allow_alerts, "fast": fast}
+               "allow_alerts": allow_alerts, "fast": fast, "skip_sr": skip_sr}
         # "Solo el ultimo frame importa": si el motor no llega al ritmo de la
         # webcam, la cola crece y el resultado llega cada vez mas rancio. Se
         # descartan los frames en espera cuando se acumulan.
@@ -311,6 +313,26 @@ class Inferencer:
         if "error" in out:
             raise out["error"]
         return out["value"]
+
+    def peek(self, image: np.ndarray, conf: float, imgsz: int,
+             fast: bool = True, skip_sr: bool = True) -> tuple | None:
+        """Inferencia asincrona de la camara en vivo: encola el frame y
+        devuelve EN SEGUIDA el ultimo resultado disponible (o `None` al
+        arranque), sin bloquear. El worker procesa al ritmo que puede y
+        descarta frames viejos; el stream sirve siempre el frame anotado mas
+        reciente. En vivo se salta Real-ESRGAN (``skip_sr``) para mantener el
+        real-time; la SR 4× queda en /api/detect, /api/frame y /api/video.
+        """
+        out = {"done": threading.Event(), "no_draw": False,
+               "allow_alerts": True, "fast": fast, "skip_sr": skip_sr}
+        while self._q.qsize() > 3:
+            try:
+                self._q.get_nowait()
+            except queue.Empty:
+                break
+        self._q.put((image, conf, imgsz, out))
+        with self._lock_async:
+            return self._last_async
 
     def shutdown(self) -> None:
         self._q.put(None)
@@ -954,7 +976,12 @@ def api_video():
 
 
 def _mjpeg(camera_index: int, conf: float, imgsz: int):
-    """Generador del stream de la webcam."""
+    """Stream de la webcam: captura a full fps (drop de frames viejos si el
+    worker se atrasa) y sirve SIEMPRE el ultimo resultado anotado por el hilo
+    trabajador, sin bloquear en FBF. En vivo se salta Real-ESRGAN
+    (``peek(..., skip_sr=True)``) para que la deteccion sea en tiempo real;
+    la SR 4× queda en /api/detect, /api/frame y /api/video con --esrgan.
+    """
     cap = cv2.VideoCapture(camera_index)
     if not cap.isOpened():
         yield b""
@@ -966,7 +993,12 @@ def _mjpeg(camera_index: int, conf: float, imgsz: int):
             ok, frame = cap.read()
             if not ok:
                 break
-            annotated, result, dets, _t = _inferencer.detect(frame, conf, imgsz)
+            res = _inferencer.peek(frame, conf, imgsz, fast=True, skip_sr=True)
+            if res is None:
+                annotated = frame.copy()
+                dets, result = [], None
+            else:
+                annotated, result, dets, _t = res
             fps_n += 1
             elapsed = time.perf_counter() - fps_t
             if elapsed >= 0.5:
@@ -975,7 +1007,7 @@ def _mjpeg(camera_index: int, conf: float, imgsz: int):
 
             annotate_status(annotated, dets, fps, result)
 
-            frame_bytes = encode_jpeg(annotated, quality=80)
+            frame_bytes = encode_jpeg(annotated, quality=75)
             yield (
                 b"--frame\r\n"
                 b"Content-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n"
