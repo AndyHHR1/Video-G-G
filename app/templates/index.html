@@ -445,9 +445,11 @@ $('#bvid').onclick = async () => {
 const RISK_COLOR = {ALTO:'#e03c3c', MEDIO:'#f2a83c', BAJO:'#3fb85a',
                     NEUTRO:'#dcdcdc', CONTEXTO:'#c878c8'};
 function drawBoxes(src, dst, d) {
-  // `src` ya es el canvas escalado que se envio al servidor, asi que NO se
-  // vuelve a multiplicar por una escala: hacerlo encogia el lienzo dos
-  // veces (con webcam de 1920 el lienzo acababa en 853 px en vez de 1280).
+  // `src` es el frame super-resuelto (SR 4×) devuelto por el servidor como
+  // `image`, o, si no se devolvió, el canvas nativo capturado en el navegador.
+  // Las cajas vienen normalizadas a 0..1 sobre `src`, por lo que basta fijar
+  // dst a ese tamaño y pintarlas sin volver a escalar; forzar width=100% en
+  // vez de eso encogía el lienzo dos veces (webcam 1920 quedaba en 853 px).
   if (dst.width !== src.width || dst.height !== src.height) {
     dst.width = src.width; dst.height = src.height;
   }
@@ -709,7 +711,21 @@ $('#bcam').onclick = async () => {
             {method:'POST', headers:{'Content-Type':'image/jpeg'}, body: blob});
           const d = await readJson(r);
           if (d.error) throw new Error(d.error);
-          drawBoxes(small, disp, d);
+          // El servidor devuelve el frame super-resuelto (SR 4×) como `image`
+          // en base64: se dibuja ese lienzo en vez del frame nativo para que el
+          // display muestre la SR. Si no viene (servidor sin --esgran, o frame
+          // en espera), se conserva el frame nativo capturado por el navegador.
+          if (d.image) {
+            const img = new Image();
+            img.onload = () => drawBoxes(img, disp, d);
+            // El servidor envía la SR ya en base64 (rápido: el navegador la
+            // decodifica nativamente). Se acepta hex por si acaso para no
+            // romper respuestas antiguas: hex es puramente [0-9a-f].
+            const b64 = /^[0-9a-f]+$/i.test(d.image) ? hexToB64(d.image) : d.image;
+            img.src = 'data:image/jpeg;base64,' + b64;
+          } else {
+            drawBoxes(small, disp, d);
+          }
           $('#camrisk').innerHTML = riskBox(d.summary) + `
             <div class="stat"><span>Inferencia</span><b>${d.timing.predict} ms</b></div>
             <div class="stat"><span>Dibujo</span><b>${d.timing.draw} ms</b></div>

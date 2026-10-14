@@ -94,13 +94,26 @@ echo "  ✓ Paquetes principales instalados"
 $PIP install "mediapipe==0.10.21" "protobuf>=4.25.3,<5" 2>&1 | tail -1
 echo "  ✓ MediaPipe + protobuf corregido"
 
-# ONNX Runtime (GPU or CPU según detección)
-if [ "$HAS_NVIDIA" -eq 1 ]; then
-    $PIP install "onnxruntime-gpu==1.30.0" 2>&1 | tail -1
+# Real-ESRGAN super-resolution (build + runtime)
+# onnxruntime se usaba antes, pero el modelo ONNX exportado tiene un bug de
+# Resize (scales en slot de roi) que hace cuelgue en CUDA. onnx2torch convierte
+# el ONNX a PyTorch FX y la inferencia se hace con PyTorch CUDA directamente.
+$PIP install "onnx==1.20.0" "onnx2torch==1.5.15" "huggingface_hub==2.2.0" 2>&1 | tail -1
+echo "  ✓ Real-ESRGAN deps (onnx + onnx2torch)"
+
+# --- Descargar modelo Real-ESRGAN ONNX ---
+if [ ! -f "$ROOT/runs/models/real_esrgan_x4.onnx" ]; then
+    echo "Descargando modelo Real-ESRGAN x4 (ONNX, ~64 MB)..."
+    "$ROOT/venv/bin/python" "$ROOT/app/build_esrgan.py" 2>&1 | tail -2
+    if [ ! -f "$ROOT/runs/models/real_esrgan_x4.onnx" ]; then
+        echo "  [ADVERTENCIA] No se pudo descargar el modelo Real-ESRGAN."
+        echo "  Super-resolución desactivada. Use --esrgan para reactivarla."
+    else
+        echo "  ✓ Modelo Real-ESRGAN listo"
+    fi
 else
-    $PIP install "onnxruntime==1.30.0" 2>&1 | tail -1
+    echo "  ✓ Modelo Real-ESRGAN ya presente"
 fi
-echo "  ✓ ONNX Runtime"
 
 # CUDA utilities (solo si hay GPU)
 if [ "$HAS_NVIDIA" -eq 1 ]; then
@@ -138,6 +151,11 @@ echo ""
 echo "============================================================"
 if [ -z "$MISSING" ]; then
     DEVICE_FLAG="--device auto"
+    ESRGAN_FLAG=""
+    if [ "$HAS_NVIDIA" -eq 1 ] && [ -f "$ROOT/runs/models/real_esrgan_x4.onnx" ]; then
+        ESRGAN_FLAG="--esrgan"
+        echo "  ✓ Real-ESRGAN 4× activado (usa --esrgan para activar/desactivar)"
+    fi
     if [ "$HAS_NVIDIA" -eq 0 ]; then
         DEVICE_FLAG="--device cpu"
         echo "  ✓ LISTO (modo CPU) - Inicie el servidor:"
@@ -145,7 +163,7 @@ if [ -z "$MISSING" ]; then
         echo "  ✓ LISTO (modo GPU) - Inicie el servidor:"
     fi
     echo ""
-    echo "  ./venv/bin/python app/server.py $DEVICE_FLAG --host 127.0.0.1 --port 5000"
+    echo "  ./venv/bin/python app/server.py $DEVICE_FLAG $ESRGAN_FLAG --host 127.0.0.1 --port 5000"
     echo ""
     echo "  Abra: http://127.0.0.1:5000"
     echo "============================================================"

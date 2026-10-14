@@ -20,6 +20,7 @@ Uso:
 from __future__ import annotations
 
 import argparse
+import base64
 import hmac
 import json
 import io
@@ -95,6 +96,7 @@ RISK_ORDER = {"ALTO": 3, "MEDIO": 2, "BAJO": 1, "NEUTRO": 0, "CONTEXTO": 0}
 
 sys.path.insert(0, str(ROOT / "app"))
 from risk_engine import RISK_COLOR, RiskEngine
+from real_esrgan import RealESRGAN
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 512 * 1024 * 1024   # 512 MB
@@ -119,14 +121,22 @@ class Inferencer:
 
     Total: ~85 ms por peticion frente a ~27 ms con este hilo unico. El hilo se
     crea una vez al arrancar y attend todas las peticiones.
+
+    Si ``enable_esrgan`` es True, cada frame se super-resuelve 4× con
+    Real-ESRGAN antes de la detección.  La conversión ONNX → PyTorch FX es
+    *lazy* y se hace dentro de este hilo para que el contexto CUDA quede
+    ligado al worker (igual que el modelo YOLO).
     """
 
     def __init__(self, weights: str, device: int | str = "auto",
-                 obstacle_weights: str = "yolov8s.pt", conf: float = 0.25):
+                 obstacle_weights: str = "yolov8s.pt", conf: float = 0.25,
+                 enable_esrgan: bool = False):
         self._weights = weights
         self._device = device
         self._obstacle_weights = obstacle_weights
         self._conf = conf
+        self._enable_esrgan = enable_esrgan
+        self._esrgan: RealESRGAN | None = None
         self._q: queue.Queue = queue.Queue()
         # Modo asincrono para la camara en vivo: el navegador entrega el frame
         # y recibe ENSEGUIDA el ultimo resultado calculado, sin esperar a la
@@ -164,6 +174,11 @@ class Inferencer:
             device=self._device, conf=self._conf, enable_pose=True,
             anonymize=True,
         )
+        # Real-ESRGAN: super-resolución 4× (solo si --esrgan).  Se carga
+        # DENTRO del hilo trabajador para que el contexto CUDA se cree y
+        # quede ligado a este mismo hilo (igual que YOLO).
+        if self._enable_esrgan:
+            self._esrgan = RealESRGAN(device=self._device)
         self._ready.set()
         while True:
             job = self._q.get()
@@ -179,7 +194,8 @@ class Inferencer:
                         image, conf, imgsz,
                         draw=not out.get("no_draw", False),
                         force=out.get("force", False),
-                        allow_alerts=out.get("allow_alerts", True))
+                        allow_alerts=out.get("allow_alerts", True),
+                        fast=out.get("fast", False))
                     # El ultimo resultado se guarda SIEMPRE, no solo en modo
                     # asincrono. Antes se guardaba bajo `if self._async`, pero
                     # la peticion restaura `_async = False` en su `finally`
@@ -205,7 +221,7 @@ class Inferencer:
                 out["done"].set()
 
     def _job(self, image, conf, imgsz, draw=True, force=False,
-             allow_alerts=True):
+             allow_alerts=True, fast=False):
         """Motor completo + dibujo, ambos dentro del hilo trabajador.
 
         El dibujo tambien se hace aqui a proposito: medir en esta maquina
@@ -217,6 +233,11 @@ class Inferencer:
             self._engine.conf = conf
         t0 = time.perf_counter()
         self._engine._camara_connected = True
+        # Super-resolución 4× (RQNF03-extra): opcional, aplicada ANTES de la
+        # detección para que las bboxes coincidan con el frame escalado y el
+        # dibujo posterior sea consistente.
+        if self._esrgan is not None:
+            image = self._esrgan.enhance(image, fast=fast)
         result = self._engine.step(image, force=force,
                                    allow_alerts=allow_alerts)
         t_predict = (time.perf_counter() - t0) * 1000
@@ -261,15 +282,19 @@ class Inferencer:
         self._async = on
 
     def detect(self, image: np.ndarray, conf: float, imgsz: int, draw: bool = True,
-               force: bool = False, allow_alerts: bool = True):
+               force: bool = False, allow_alerts: bool = True, fast: bool = False):
         """Encola el trabajo y espera el resultado.
 
         En modo asincrono devuelve de inmediato el ultimo resultado disponible
         (o `None` si aun no hay ninguno). El frame se encola igualmente, asi
         que el motor sigue trabajando al ritmo que puede.
+
+        ``fast`` fuerza la vía rápida de Real-ESRGAN (112 px) para que la
+        cámara en vivo mantenga fluidez; uploads y video por lotes usan
+        calidad (hasta 160 px) para que la salida 4× se vea nítida.
         """
         out = {"done": threading.Event(), "no_draw": not draw, "force": force,
-               "allow_alerts": allow_alerts}
+               "allow_alerts": allow_alerts, "fast": fast}
         # "Solo el ultimo frame importa": si el motor no llega al ritmo de la
         # webcam, la cola crece y el resultado llega cada vez mas rancio. Se
         # descartan los frames en espera cuando se acumulan.
@@ -382,6 +407,16 @@ def encode_jpeg(image: np.ndarray, quality: int = 82) -> bytes:
     return buf.tobytes()
 
 
+def encode_b64(image: np.ndarray, quality: int = 82) -> str:
+    """JPEG base64. Se usa en el stream en vivo: servir ya base64 (en vez de
+    hex) evita que el navegador haga un bucle parseInt de ~44 k chars por
+    frame, que bloqueaba el hilo principal y destruía la fluidez."""
+    ok, buf = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, quality])
+    if not ok:
+        raise RuntimeError("no se pudo codificar la imagen")
+    return base64.b64encode(buf.tobytes()).decode("ascii")
+
+
 # --------------------------------------------------------------------------- #
 # Resumen de riesgo
 # --------------------------------------------------------------------------- #
@@ -477,7 +512,7 @@ def api_detect():
 
     return respuesta(dets, result, timing,
                      inference_ms=timing["predict"],
-                     size=[int(image.shape[1]), int(image.shape[0])],
+                     size=[int(annotated.shape[1]), int(annotated.shape[0])],
                      image=payload)
 
 
@@ -524,7 +559,14 @@ def api_frame():
     # camara en vez del de la imagen subida.
     _inferencer.set_async(bool(not overlay and request.args.get("sync", "0") != "1"))
     try:
-        got = _inferencer.detect(image, conf, imgsz, draw=overlay)
+        # Cámara en vivo (overlay=0) y uploads/imagen: SR en calidad (hasta
+        # 320 px, salida 4× nítida, igual que /api/video) para que el display
+        # muestre la super-resolución real. Antes usaba `fast` (112 px) para la
+        # cámara por fluidez, pero la SR a 112 se ve borrosa — el usuario ve
+        # mejor la calidad. El fluidez del en vivo se mantiene con el modo
+        # asíncrono (#fast, sync=0) y el descarte de frames de la cola; el
+        # preview en crudo (corner) sigue a 30 fps nativo.
+        got = _inferencer.detect(image, conf, imgsz, draw=overlay, fast=False)
     finally:
         _inferencer.set_async(False)
     if got is None:
@@ -537,11 +579,17 @@ def api_frame():
         return respuesta(dets, result, timing,
                          image=encode_jpeg(annotated, quality=72).hex())
 
-    # Modo `overlay=0`: se devuelven SOLO las cajas y el navegador dibuja
-    # sobre el frame que ya tiene. Evita codificar y reenviar ~50 KB de JPEG
-    # por frame, que era el cuello de botella: la inferencia son 16 ms pero el
-    # ciclo completo llegaba a 45 ms.
-    h, w = image.shape[:2]
+    # Modo `overlay=0` (cámara en vivo): se devuelven las cajas (normalizadas a
+    # 0..1 sobre el SR) Y el frame SR 4× codificado como base64 (`image`), para
+    # que el navegador dibuje la super-resolución en vez del frame nativo.
+    # Antes se omitía la imagen por fluidez, pero el decode nativo de una
+    # data-URL base64 es barato: el cuello pasa por la inferencia SR (~463 ms
+    # calidad), no por el envío. El fluidez del en vivo se mantiene vía modo
+    # asíncrono (#fast, sync=0) y el descarte de frames de la cola; el preview
+    # en crudo (corner) sigue a 30 fps nativo.
+    # `annotated` es el frame SR 4× (--esrgan): las cajas vienen en ese sistema
+    # de coordenadas, así que la normalización es respecto al SR (no al original).
+    h, w = annotated.shape[:2]
     # Solo las detecciones con caja se normalizan a 0..1. Las señales de
     # postura (`sin_pasamanos`, `distraccion`, `tambaleo`) NO tienen caja: son
     # condiciones descritas con keypoints, no objetos que se puedan encerrar,
@@ -555,6 +603,10 @@ def api_frame():
             ]})
         else:
             norm.append(d)
+    # `annotated` es el frame SR 4× (modo overlay=0 no dibuja cajas aquí: el
+    # navegador las pinta sobre la SR). Se devuelve como `image` en base64
+    # (no hex) para que el display muestre la super-resolución en vez del frame
+    # nativo sin bloquear el hilo principal con un parseInt por byte.
     return jsonify({
         "detections": norm,
         "summary": summarise(dets),
@@ -566,6 +618,7 @@ def api_frame():
         "sistema": result["sistema"],
         "timing": timing,
         "size": [w, h],
+        "image": encode_b64(annotated, quality=72),
     })
 
 
@@ -831,13 +884,13 @@ def api_video():
     # `imageio-ffmpeg`, que si incluye libx264.
     out_tmp = Path(tempfile.gettempdir()) / f"raw_{uuid.uuid4().hex}.mp4"
     final_tmp = Path(tempfile.gettempdir()) / f"out_{uuid.uuid4().hex}.mp4"
-    writer = cv2.VideoWriter(
-        str(out_tmp), cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h)
-    )
-    if not writer.isOpened():
-        cap.release()
-        tmp.unlink(missing_ok=True)
-        return jsonify({"error": "no se pudo preparar la salida de video"}), 400
+    # El writer se abre en DEMORA (lazy) sobre el PRIMER frame anotado: si
+    # --esrgan está activo el frame es 4× mas grande que el original, y abrir el
+    # writer con (w, h) original escribe un mp4 corrupto (pálido, estirado,
+    # 0 frames). Usando annotated.shape[1::-1] el tamaño del writer siempre
+    # coincide con el del frame que se escribe.
+    writer = None
+    out_size = (w, h)
 
     total_counts, frames, t_infer = Counter(), 0, 0.0
 
@@ -856,12 +909,25 @@ def api_video():
             total_counts.update(x.get("class_name") or x.get("tipo", "?")
                                  for x in _d)
             total_counts.update(o["tipo"] for o in result.get("obstaculos", []))
+            if writer is None:
+                out_size = (annotated.shape[1], annotated.shape[0])
+                writer = cv2.VideoWriter(
+                    str(out_tmp),
+                    cv2.VideoWriter_fourcc(*"mp4v"), fps, out_size,
+                )
+                if not writer.isOpened():
+                    cap.release()
+                    tmp.unlink(missing_ok=True)
+                    return jsonify({
+                        "error": f"no se pudo preparar la salida de video ({out_size[0]}×{out_size[1]})"
+                    }), 400
             writer.write(annotated)
             if frames % 200 == 0:
                 print(f"  {frames} frames...", flush=True)
 
         cap.release()
-        writer.release()
+        if writer is not None:
+            writer.release()
         # OpenCV deja MPEG-4 Part 2, que ningun navegador reproduce: se
         # recodifica a H.264, que si es universal.
         ok, err = _transcode_h264(out_tmp, final_tmp, audio_source=tmp)
@@ -1006,6 +1072,12 @@ def health():
         "device": "cuda:0" if _cv_cuda() else "cpu",
         "classes": len(CLASS_INFO),
         "auth": "activo" if AUTH_ON else "desactivado (PANEL_TOKEN sin definir)",
+        "esrgan": (
+            "activo (cuda)" if getattr(_inferencer, "_esrgan", None) and _inferencer._esrgan.cuda
+            else "activo (cpu)" if getattr(_inferencer, "_esrgan", None)
+            else "desactivado (--esrgan)" if getattr(_inferencer, "_enable_esrgan", False)
+            else "desactivado"
+        ),
     })
 
 
@@ -1030,6 +1102,9 @@ def main() -> None:
     ap.add_argument("--debug", action="store_true")
     ap.add_argument("--device", default="auto",
                     help="Dispositivo: 'auto', 'cpu', 'cuda', o índice GPU (0, 1...)")
+    ap.add_argument("--esrgan", action="store_true",
+                    help="Super-resolución Real-ESRGAN 4× antes de la detección "
+                         "(~+120 ms/frame en RTX 5050).")
     args = ap.parse_args()
 
     weights = Path(args.weights)
@@ -1062,6 +1137,7 @@ def main() -> None:
         str(weights), conf=args.conf,
         obstacle_weights=args.obstacle_weights,
         device=args.device,
+        enable_esrgan=args.esrgan,
     )
     print("  modelo listo")
     app.run(host=args.host, port=args.port, debug=args.debug, threaded=True)
