@@ -75,3 +75,8 @@ __pycache__/
 # --- Sistema ---
 .DS_Store
 Thumbs.db
+# --- Carpeta temporal de videos de prueba ---
+escalera/
+# --- Carpeta temporal de videos de prueba ---
+Escaleras/
+
