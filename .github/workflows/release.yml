@@ -34,6 +34,7 @@ jobs:
   # "Supuesto Ideal": este job solo corre en tags esrgan-previo-v*.
   create_esgrna_release:
     if: startsWith(github.ref_name, 'esrgan-previo-v')
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
@@ -46,7 +47,7 @@ jobs:
           name: Versión con mejora de video real_esrgan_x4 pre correcciones (Por si quema este proyecto)
           generate_release_notes: true
           files: |
-            app/real_esgru.py
-            app/build_esgru.py
+            app/real_esrgan.py
+            app/build_esrgan.py
             setup.sh
             requirements.txt
