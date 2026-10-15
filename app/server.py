@@ -239,6 +239,11 @@ class Inferencer:
         # `sr=False` para fluidar (~15-20 fps de cajas): el 4× calidad en RTX 5050
         # dura ~0.8-1.2 s/frame, incompatible con 30 fps. SR bajo demanda
         # (?sr=1) o en uploads/imagen vía /api/detect (donde sr=True por defecto).
+        if sr and self._esrgan is None:
+            try:
+                self._esrgan = RealESRGAN(device=self._device)
+            except FileNotFoundError as exc:
+                print(f"  [aviso] Real-ESRGAN no disponible: {exc}")
         if self._esrgan is not None and sr:
             image = self._esrgan.enhance(image, fast=fast)
         result = self._engine.step(image, force=force,
@@ -509,7 +514,7 @@ def api_detect():
     # obstaculos solo se evaluan en los fotogramas que tocan su cadencia, y al
     # recargar la misma imagen no cambia nada: la escena es la misma.
     annotated, result, dets, timing = _inferencer.detect(
-        image, conf, imgsz, draw=True, force=True, allow_alerts=False)
+        image, conf, imgsz, draw=True, force=True, allow_alerts=False, sr=True)
     t_all = (time.perf_counter() - t0) * 1000
     t_enc = time.perf_counter()
     payload = encode_jpeg(annotated).hex()
@@ -906,7 +911,7 @@ def api_video():
             if not ok:
                 break
             t0 = time.perf_counter()
-            annotated, result, _d, _t = _inferencer.detect(frame, conf, imgsz)
+            annotated, result, _d, _t = _inferencer.detect(frame, conf, imgsz, sr=True)
             engine._video_frame_no = frames  # frame actual (0-indexed)
             t_infer += time.perf_counter() - t0
             frames += 1
@@ -1150,7 +1155,7 @@ def main() -> None:
     print("  precalentando inferencia (cold start)...")
     try:
         _inferencer.detect(np.zeros((320, 320, 3), np.uint8), args.conf, args.imgsz,
-                           draw=False, force=True, allow_alerts=False)
+                           draw=False, force=True, allow_alerts=False, sr=False)
     except Exception as exc:  # noqa: BLE001
         print(f"  warmup omitido: {exc}")
     # Limpio el frame de test del warmup: que el primer frame en vivo no devuelva
