@@ -585,16 +585,18 @@ def api_frame():
         return respuesta(dets, result, timing,
                          image=encode_jpeg(annotated, quality=72).hex())
 
-    # Modo `overlay=0` (cámara en vivo): se devuelven las cajas (normalizadas a
-    # 0..1 sobre el SR) Y el frame SR 4× codificado como base64 (`image`), para
-    # que el navegador dibuje la super-resolución en vez del frame nativo.
-    # Antes se omitía la imagen por fluidez, pero el decode nativo de una
-    # data-URL base64 es barato: el cuello pasa por la inferencia SR (~463 ms
-    # calidad), no por el envío. El fluidez del en vivo se mantiene vía modo
-    # asíncrono (#fast, sync=0) y el descarte de frames de la cola; el preview
-    # en crudo (corner) sigue a 30 fps nativo.
-    # `annotated` es el frame SR 4× (--esrgan): las cajas vienen en ese sistema
-    # de coordenadas, así que la normalización es respecto al SR (no al original).
+    # Modo `overlay=0` (cámara en vivo): se devuelven las cajas normalizadas a
+    # 0..1. La imagen solo se incluye cuando el SR está activo (`live_sr`): con SR
+    # el servidor devuelve el frame 4× super-resuelto y el navegador dibuja la SR
+    # sobre el nativo; SIN SR (`live normal`) el frame que devolvería es el
+    # original re-encodado, que el navegador ya tiene en su propio canvas.
+    #
+    # El decode de una data-URL base64 (base64→JPEG→bitmap) costaba ~15-25 ms por
+    # fotograma en el hilo principal y impedía al cliente mantener 30 fps con las
+    # cajas visibles. Al omitir la imagen en `live normal`, el navegador dibuja el
+    # frame nativo ya capturado y superpone las cajas de inmediato. El modo
+    # asíncrono + descarte de cola desacopla la inferencia del display; la imagen
+    # SR a 4× solo viaja cuando el usuario lo pide explícitamente con ?sr=1.
     h, w = annotated.shape[:2]
     # Solo las detecciones con caja se normalizan a 0..1. Las señales de
     # postura (`sin_pasamanos`, `distraccion`, `tambaleo`) NO tienen caja: son
@@ -609,11 +611,7 @@ def api_frame():
             ]})
         else:
             norm.append(d)
-    # `annotated` es el frame SR 4× (modo overlay=0 no dibuja cajas aquí: el
-    # navegador las pinta sobre la SR). Se devuelve como `image` en base64
-    # (no hex) para que el display muestre la super-resolución en vez del frame
-    # nativo sin bloquear el hilo principal con un parseInt por byte.
-    return jsonify({
+    resp = {
         "detections": norm,
         "summary": summarise(dets),
         "riesgo": result["riesgo"],
@@ -624,8 +622,10 @@ def api_frame():
         "sistema": result["sistema"],
         "timing": timing,
         "size": [w, h],
-        "image": encode_b64(annotated, quality=72),
-    })
+    }
+    if live_sr:
+        resp["image"] = encode_b64(annotated, quality=72)
+    return jsonify(resp)
 
 
 def annotate_status(frame: np.ndarray, dets: list[dict], fps: float = 0.0,

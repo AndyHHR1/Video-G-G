@@ -715,9 +715,13 @@ $('#bcam').onclick = async () => {
           const d = await readJson(r);
           if (d.error) throw new Error(d.error);
           // El servidor devuelve el frame super-resuelto (SR 4×) como `image`
-          // en base64: se dibuja ese lienzo en vez del frame nativo para que el
-          // display muestre la SR. Si no viene (servidor sin --esgran, o frame
-          // en espera), se conserva el frame nativo capturado por el navegador.
+          // en base64 SOLO cuando el SR está activo (?sr=1): se dibuja ese
+          // lienzo en vez del frame nativo para que el display muestre la SR.
+          // Cuando el SR está OFF (`live normal`), el servidor no envía imagen:
+          // re-enviar el frame nativo re-encodado como JPEG cuesta ~15-25 ms de
+          // decode por fotograma en el hilo principal y rompe 30 fps. Sin
+          // imagen, el navegador dibuja el frame ya capturado (`small`) y
+          // superpone las cajas, manteniendo fluidez.
           if (d.image) {
             const img = new Image();
             img.onload = () => drawBoxes(img, disp, d);
