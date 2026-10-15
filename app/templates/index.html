@@ -206,8 +206,8 @@
               <option value="33" selected>30 fps (recomendado)</option>
             </select>
           </label>
-          <label title="Desacoplado: el navegador no espera y llega a ~110 fps, pero las cajas se dibujan sobre el frame actual con datos de fotogramas anteriores, asi que van retrasadas.">
-            <input type="checkbox" id="fast"> Modo rápido (cajas con retardo)
+          <label title="Con SR el live sube a ~0.8-1.2 s/frame (≈1 fps). Sin SR el live es fluido a 30 fps con cajas frescas; el SR 4× se aplica en uploads o con este toggle (lento, con retardo).">
+            <input type="checkbox" id="fast"> SR en vivo (≈1 fps, retardo ~1 s)
           </label>
         </div>
         <div class="stage" id="scam">
@@ -617,7 +617,7 @@ $('#bcam').onclick = async () => {
       `${cam.ok ? 'conectada' : '<b style="color:#e03c3c">sin señal</b>'} · ` +
       `cámara ${v.videoWidth}×${v.videoHeight} → envío ${small.width}×${small.height} · ` +
       `${cam.sent} frames · ${cam.fps.toFixed(1)} fps · ` +
-      `${$('#fast').checked ? 'modo rápido (cajas retrasadas)' : 'modo sincrono'} · ` +
+      `${$('#fast').checked ? 'SR en vivo (≈1 fps, lento)' : 'fluido 30 fps (sin SR)'} · ` +
       `umbral ${$('#ccam').value}` +
       (cam.err ? ` · <b style="color:#e03c3c">${cam.err}</b>` : '');
   };
@@ -705,9 +705,12 @@ $('#bcam').onclick = async () => {
           // ve. El modo rapido no espera al motor y llega a ~110 fps, pero
           // entonces las cajas se dibujan sobre el frame actual con datos de
           // fotogramas anteriores y se ven retrasadas.
-          const sync = $('#fast').checked ? 0 : 1;
+          // #fast es SR en vivo: OFF (default) = live fluido 30 fps sin SR; ON =
+          // SR 4× (lento ~1 fps). El display es asíncrono: repinta el último
+          // SR+cajas a 30 fps (se permite retardo). Se purga el frame-by-frame.
+          const sr = $('#fast').checked ? 1 : 0;
           const r = await fetch('/api/frame?conf=' + $('#ccam').value +
-              '&overlay=0&sync=' + sync,
+              '&overlay=0&sync=0&sr=' + sr,
             {method:'POST', headers:{'Content-Type':'image/jpeg'}, body: blob});
           const d = await readJson(r);
           if (d.error) throw new Error(d.error);

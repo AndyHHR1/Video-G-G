@@ -196,7 +196,7 @@ class Inferencer:
                         force=out.get("force", False),
                         allow_alerts=out.get("allow_alerts", True),
                         fast=out.get("fast", False),
-                        skip_sr=out.get("skip_sr", False))
+                        sr=out.get("sr", True))
                     # El ultimo resultado se guarda SIEMPRE, no solo en modo
                     # asincrono. Antes se guardaba bajo `if self._async`, pero
                     # la peticion restaura `_async = False` en su `finally`
@@ -222,7 +222,7 @@ class Inferencer:
                 out["done"].set()
 
     def _job(self, image, conf, imgsz, draw=True, force=False,
-             allow_alerts=True, fast=False, skip_sr=False):
+             allow_alerts=True, fast=False, sr=True):
         """Motor completo + dibujo, ambos dentro del hilo trabajador.
 
         El dibujo tambien se hace aqui a proposito: medir en esta maquina
@@ -234,10 +234,12 @@ class Inferencer:
             self._engine.conf = conf
         t0 = time.perf_counter()
         self._engine._camara_connected = True
-        # Super-resolución 4× (RQNF03-extra): opcional, aplicada ANTES de la
-        # detección para que las bboxes coincidan con el frame escalado y el
-        # dibujo posterior sea consistente.
-        if self._esrgan is not None and not skip_sr:
+        # Super-resolución 4× (RQNF03-extra): aplicada ANTES de la detección para
+        # que las bboxes coincidan con el frame escalado. En el live se pasa
+        # `sr=False` para fluidar (~15-20 fps de cajas): el 4× calidad en RTX 5050
+        # dura ~0.8-1.2 s/frame, incompatible con 30 fps. SR bajo demanda
+        # (?sr=1) o en uploads/imagen vía /api/detect (donde sr=True por defecto).
+        if self._esrgan is not None and sr:
             image = self._esrgan.enhance(image, fast=fast)
         result = self._engine.step(image, force=force,
                                    allow_alerts=allow_alerts)
@@ -284,7 +286,7 @@ class Inferencer:
 
     def detect(self, image: np.ndarray, conf: float, imgsz: int, draw: bool = True,
                force: bool = False, allow_alerts: bool = True, fast: bool = False,
-               skip_sr: bool = False):
+               sr: bool = True):
         """Encola el trabajo y espera el resultado.
 
         En modo asincrono devuelve de inmediato el ultimo resultado disponible
@@ -294,9 +296,11 @@ class Inferencer:
         ``fast`` fuerza la vía rápida de Real-ESRGAN (112 px) para que la
         cámara en vivo mantenga fluidez; uploads y video por lotes usan
         calidad (hasta 160 px) para que la salida 4× se vea nítida.
+        ``sr`` (default True) aplica Real-ESRGAN; live pasa sr=False para fluidar
+        a 30 fps (SR on-demand ?sr=1 o /api/detect de uploads).
         """
         out = {"done": threading.Event(), "no_draw": not draw, "force": force,
-               "allow_alerts": allow_alerts, "fast": fast, "skip_sr": skip_sr}
+               "allow_alerts": allow_alerts, "fast": fast, "sr": sr}
         # "Solo el ultimo frame importa": si el motor no llega al ritmo de la
         # webcam, la cola crece y el resultado llega cada vez mas rancio. Se
         # descartan los frames en espera cuando se acumulan.
@@ -313,26 +317,6 @@ class Inferencer:
         if "error" in out:
             raise out["error"]
         return out["value"]
-
-    def peek(self, image: np.ndarray, conf: float, imgsz: int,
-             fast: bool = True, skip_sr: bool = True) -> tuple | None:
-        """Inferencia asincrona de la camara en vivo: encola el frame y
-        devuelve EN SEGUIDA el ultimo resultado disponible (o `None` al
-        arranque), sin bloquear. El worker procesa al ritmo que puede y
-        descarta frames viejos; el stream sirve siempre el frame anotado mas
-        reciente. En vivo se salta Real-ESRGAN (``skip_sr``) para mantener el
-        real-time; la SR 4× queda en /api/detect, /api/frame y /api/video.
-        """
-        out = {"done": threading.Event(), "no_draw": False,
-               "allow_alerts": True, "fast": fast, "skip_sr": skip_sr}
-        while self._q.qsize() > 3:
-            try:
-                self._q.get_nowait()
-            except queue.Empty:
-                break
-        self._q.put((image, conf, imgsz, out))
-        with self._lock_async:
-            return self._last_async
 
     def shutdown(self) -> None:
         self._q.put(None)
@@ -575,20 +559,18 @@ def api_frame():
     if image is None:
         return jsonify({"error": "no se pudo decodificar el frame"}), 400
 
-    # El modo asincrono se activa SOLO para esta peticion. Antes se dejaba
-    # pegajoso (`set_async(True)` sin restaurar nunca), y al pasar a la
-    # pestana de imagen `/api/detect` devolvia el ultimo resultado de la
-    # camara en vez del de la imagen subida.
-    _inferencer.set_async(bool(not overlay and request.args.get("sync", "0") != "1"))
+    # Cámara en vivo: SIEMPRE asíncrono. Se purga el modo frame-by-frame
+    # síncrono (sync=1): el navegador recibe el último SR+cajas calculado en
+    # cuanto lo pide (~10 ms), dejando el display fluido a 30 fps con un
+    # retardo de ~0.8-1 s (el productor SR 4× calidad tarda ~0.8 s/frame).
+    # `sync=1` pasa a ser un no-op; sirve sólo para `/api/detect` (imagen fija).
+    _inferencer.set_async(bool(not overlay))
+    # SR on-demand en vivo: OFF por defecto (4× calidad ~0.8-1.2 s/frame rompe
+    # 30 fps). ?sr=1 lo fuerza; /api/detect mantiene SR siempre.
+    live_sr = overlay or request.args.get("sr", "0") == "1"
     try:
-        # Cámara en vivo (overlay=0) y uploads/imagen: SR en calidad (hasta
-        # 320 px, salida 4× nítida, igual que /api/video) para que el display
-        # muestre la super-resolución real. Antes usaba `fast` (112 px) para la
-        # cámara por fluidez, pero la SR a 112 se ve borrosa — el usuario ve
-        # mejor la calidad. El fluidez del en vivo se mantiene con el modo
-        # asíncrono (#fast, sync=0) y el descarte de frames de la cola; el
-        # preview en crudo (corner) sigue a 30 fps nativo.
-        got = _inferencer.detect(image, conf, imgsz, draw=overlay, fast=False)
+        got = _inferencer.detect(image, conf, imgsz, draw=overlay, fast=False,
+                                 sr=live_sr)
     finally:
         _inferencer.set_async(False)
     if got is None:
@@ -975,171 +957,35 @@ def api_video():
     )
 
 
-def _init_trackers(frame: np.ndarray, dets: list[dict]) -> list[dict]:
-    """Crea un tracker CSRT por deteccion con bbox valido."""
-    trs = []
-    for d in dets:
-        x1, y1, x2, y2 = d["bbox"]
-        if (x2 - x1) <= 0 or (y2 - y1) <= 0:
-            continue
-        tr = cv2.TrackerCSRT_create()
-        tr.init(frame, (int(x1), int(y1), int(x2 - x1), int(y2 - y1)))
-        trs.append({"tr": tr, "class_id": d.get("class_id"),
-                    "class_name": d.get("class_name", "objeto"),
-                    "confidence": d.get("confidence", 0.0),
-                    "risk": d.get("riesgo", "NEUTRO")})
-    return trs
-
-
-def _update_trackers(frame: np.ndarray, trs: list[dict]) -> list[dict]:
-    """Avanza los trackers sobre el frame nativo y dibuja/devuelve detecciones."""
-    out = []
-    for tk in trs:
-        ok_t, bb = tk["tr"].update(frame)
-        if not ok_t:
-            continue
-        x, y, w, h = (int(v) for v in bb)
-        info = CLASS_INFO.get(tk.get("class_id"),
-                              {"name": tk.get("class_name", "objeto"),
-                               "color": (0, 200, 0), "risk": "NEUTRO"})
-        color = RISK_COLOR.get(tk.get("risk"), info["color"])
-        cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
-        label = f'{info["name"]} {tk.get("confidence", 0):.0%} #{tk.get("class_id")}'
-        (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)
-        cv2.rectangle(frame, (x, y - th - 6), (x + tw + 8, y), color, -1)
-        cv2.putText(frame, label, (x + 4, y - 5), cv2.FONT_HERSHEY_SIMPLEX,
-                    0.5, (20, 20, 20), 2, cv2.LINE_AA)
-        out.append({"class_id": tk.get("class_id"),
-                    "class_name": info["name"],
-                    "confidence": tk.get("confidence", 0.0),
-                    "risk": tk.get("risk", "NEUTRO"),
-                    "bbox": [x, y, x + w, y + h]})
-    return out
-
-
-class LiveFeed:
-    """Camara en vivo fluida (no FBF): hilo captura/deteccion/tracking a fps de
-    camara; el render MJPEG solo lee el ultimo frame anotado a ~30 fps.
-
-    La deteccion (YOLO, SIN SR) corre cada K frames; entre medias los objetos
-    se trackinguean con CSRT sobre frames nativos -> fluidez de camara real.
-    Real-ESRGAN queda fuera del en vivo; sigue en /api/detect, /api/frame y
-    /api/video con --esgran. La inferencia pesada va por el worker
-    persistente (contexto CUDA ligado) y SOLO cada K frames, por lo que el
-    render nunca se bloquea.
-
-    Con --esgran: la SR 4× (fast) se aplica SOLO cada K frames sobre el worker
-    y el render repite (hold) el frame mejorado a ~30 fps -> el usuario ve
-    video super-resuelto y fluido (sin FBF); bboxes se renuevan cada K
-    (latencia < 7 s para K=8). Sin --esgran: deteccion nativa + tracking CSRT
-    a full fps. La SR calidad sigue en /api/detect, /api/frame, /api/video.
-    """
-
-    TRACK_K = 8
-
-    def __init__(self):
-        self._thread = None
-        self._stop = None
-        self._last = None
-        self._use_sr = False
-        self._lock = threading.Lock()
-
-    def latest(self):
-        with self._lock:
-            return self._last
-
-    def _loop(self, cam, conf, imgsz):
-        cap = cv2.VideoCapture(cam)
-        if not cap.isOpened():
-            with self._lock:
-                self._last = None
-            return
-        trs = []
-        i = 0
-        while not (self._stop and self._stop.is_set()):
-            ok, frame = cap.read()
-            if not ok:
-                break
-            i += 1
-            if self._use_sr:
-                # SR es pesada: se aplica SOLO cada K frames; el render MJPEG
-                # repite (hold) el ultimo frame mejorado a ~30 fps. El usuario
-                # ve el video super-resuelto y sigue fluido (sin FBF).
-                if (i % self.TRACK_K) == 0 or self._last is None:
-                    annotated, result, dets, _t = _inferencer.detect(
-                        frame, conf, imgsz, draw=True, skip_sr=False, fast=True)
-                    with self._lock:
-                        self._last = (annotated, dets, result)
-                # sino: se repite self._last sin hacer nada
-            else:
-                if (i % self.TRACK_K) == 0 or not trs:
-                    annotated, result, dets, _t = _inferencer.detect(
-                        frame, conf, imgsz, draw=True, skip_sr=True, fast=True)
-                    trs = _init_trackers(frame, dets)
-                    rendered = annotated
-                else:
-                    rendered = frame.copy()
-                    dets = _update_trackers(rendered, trs)
-                    result = None
-                with self._lock:
-                    self._last = (rendered, dets, result)
-        cap.release()
-        with self._lock:
-            self._last = None
-
-    def start(self, cam, conf, imgsz):
-        if self._thread is not None and self._thread.is_alive():
-            return
-        self._stop = threading.Event()
-        self._use_sr = _inferencer._esgrana is not None
-        self._thread = threading.Thread(
-            target=self._loop, args=(cam, conf, imgsz), daemon=True)
-        self._thread.start()
-
-    def stop(self):
-        if self._stop is not None:
-            self._stop.set()
-        self._thread = None
-
-
-_live_feed = LiveFeed()
-
-
 def _mjpeg(camera_index: int, conf: float, imgsz: int):
-    """Render del stream de la webcam a ~30 fps (fluido como camara real).
-
-    Antes era FBF: se hacía inferencia + SR por cada frame en el hilo de la
-    peticion, quedando ~1.5-2 fps. Ahora la captura/deteccion/tracking corren
-    en LiveFeed (hilo aparte) y este generador solo sirve el ultimo frame
-    anotado a fluidez de camara; la inferencia pesada es esporadica (cada K
-    frames) y NUNCA bloquea el stream.
-    """
-    if _inferencer is None or not _inferencer._ready.is_set():
+    """Generador del stream de la webcam."""
+    cap = cv2.VideoCapture(camera_index)
+    if not cap.isOpened():
         yield b""
         return
-    _live_feed.start(camera_index, conf, imgsz)
+    
     fps_t, fps_n, fps = time.perf_counter(), 0, 0.0
     try:
         while True:
-            res = _live_feed.latest()
-            if res is None:
-                time.sleep(0.05)
-                continue
-            annotated, dets, result = res
+            ok, frame = cap.read()
+            if not ok:
+                break
+            annotated, result, dets, _t = _inferencer.detect(frame, conf, imgsz)
             fps_n += 1
             elapsed = time.perf_counter() - fps_t
             if elapsed >= 0.5:
                 fps = fps_n / elapsed
                 fps_n, fps_t = 0, time.perf_counter()
+
             annotate_status(annotated, dets, fps, result)
-            frame_bytes = encode_jpeg(annotated, quality=75)
+
+            frame_bytes = encode_jpeg(annotated, quality=80)
             yield (
                 b"--frame\r\n"
                 b"Content-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n"
             )
-            time.sleep(1 / 30)
     finally:
-        _live_feed.stop()
+        cap.release()
 
 
 @app.get("/api/stream")
@@ -1298,6 +1144,19 @@ def main() -> None:
         enable_esrgan=args.esrgan,
     )
     print("  modelo listo")
+    # Precalentar la inferencia fría: la primera llamada a RiskEngine inicializa
+    # MediaPipe/pose (~5 s). Se fuerza un frame de test para que el primer frame
+    # en vivo no pague ese coste al usuario (el live se siente fluido al instante).
+    print("  precalentando inferencia (cold start)...")
+    try:
+        _inferencer.detect(np.zeros((320, 320, 3), np.uint8), args.conf, args.imgsz,
+                           draw=False, force=True, allow_alerts=False)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  warmup omitido: {exc}")
+    # Limpio el frame de test del warmup: que el primer frame en vivo no devuelva
+    # una SR de arranque (1280). Con SR OFF el live usa el nativo (480/640).
+    with _inferencer._lock_async:
+        _inferencer._last_async = None
     app.run(host=args.host, port=args.port, debug=args.debug, threaded=True)
 
 
