@@ -42,9 +42,10 @@
   .stage img, .stage video, .stage canvas {
     max-width:100%; max-height:72vh; display:block; border-radius:4px;
   }
-  /* el lienzo se muestra a su tamaño NATURAL. Forzar width:100% lo estiraba
-     desde 640 px reales hasta el ancho del contenedor y por eso se veía
-     borroso; ahora el fotograma llega a 1280 y el 1:1 se ve limpio */
+  /* el lienzo se muestra a su tamaño NATURAL. Forzar width:100% sin height:auto
+     estira el canvas horizontal sin escalar la altura y la imagen queda achatada.
+     height:auto preserva la proporción: el canvas de 640 px se estira a 100%
+     del contenedor y las cajas vectoriales se escalan nítidas */
   .stage canvas.live { max-width:100%; height:auto; }
   .placeholder { color:#39404f; font-size:13px; padding:60px 20px; text-align:center; }
   .risk { border-radius:8px; padding:14px; margin-bottom:12px; border:1px solid; }
@@ -447,12 +448,16 @@ const RISK_COLOR = {ALTO:'#e03c3c', MEDIO:'#f2a83c', BAJO:'#3fb85a',
 function drawBoxes(src, dst, d) {
   // `src` es el frame super-resuelto (SR 4×) devuelto por el servidor como
   // `image`, o, si no se devolvió, el canvas nativo capturado en el navegador.
-  // Las cajas vienen normalizadas a 0..1 sobre `src`, por lo que basta fijar
-  // dst a ese tamaño y pintarlas sin volver a escalar; forzar width=100% en
-  // vez de eso encogía el lienzo dos veces (webcam 1920 quedaba en 853 px).
-  if (dst.width !== src.width || dst.height !== src.height) {
-    dst.width = src.width; dst.height = src.height;
-  }
+  // Las cajas vienen normalizadas a 0..1 sobre el frame procesado, por lo que
+  // se proyectan a cualquier backing store sin importar la resolución original.
+  //
+   // NO se redimensiona dst: el backing store se mantiene fijo a 960 px en
+   // ambos modos (normal y SR), de modo que el canvas no "se achica" al
+   // cambiar del modo SR (frame 4×) al modo normal (960 px). src se
+   // dibuja escalado a dst.width×dst.height; en SR el frame 4× se sobremuestrea
+   // a 960 px (nítigo: downsampling bilineal). Antes, establecer dst.width =
+   // src.width hacía que el lienzo cambiara de tamaño entre frames y entre
+   // modos, y el video "saltaba" al reconstruir el backing store.
   const c = dst.getContext('2d');
   c.drawImage(src, 0, 0, dst.width, dst.height);
   for (const b of d.detections) {
@@ -647,11 +652,17 @@ $('#bcam').onclick = async () => {
   // segundo canvas, ya escalado, que es el que se envia
   const small = document.createElement('canvas');
   const sctx = small.getContext('2d');
-  // canvas de SALIDA: se dibuja el frame ya escalado y encima las cajas que
-  // devuelve el servidor. Evita reenviar el JPEG anotado (~50 KB por frame).
+  // canvas de SALIDA: backing store fijo a LIVE_W (960 px), casi el ancho
+  // del contenedor (~944 px). El envío al servidor también es a 960 px
+  // (encode ~7 ms, suficiente para 30 fps) pero en 1:1 con el canvas de salida
+  // —nada de estiramiento ni borrura. CSS max-width:100% lo reduce a ~944 px
+  // (casi 1:1). Antes el backing store era 1280 px en SR y 960 px en normal y
+  // el canvas "saltaba" de tamaño; ahora es siempre 960 px → el cuadro no se
+  // achica al cambiar de modo.
   const disp = document.createElement('canvas');
-  // tamaño nativo: estirarlo con CSS es lo que lo hacia borroso
-  disp.width = 1280; disp.height = Math.round(1280 * cv.height / cv.width);
+  disp.classList.add('live');
+  const LIVE_W = 960;
+  disp.width = LIVE_W; disp.height = Math.round(LIVE_W * cv.height / cv.width);
   // Se vacia el hueco y se reinserta el lienzo grande MAS la previsualizacion
   // en crudo: antes el `innerHTML=''` se comia la previsualizacion y solo
   // quedaba un lienzo a tamano natural, que se veía pequeno.
@@ -665,101 +676,99 @@ $('#bcam').onclick = async () => {
   setStat();
   $('#rate').onchange = setStat;
 
-  const loop = () => {
+  // El loop se separa en dos partes:
+  //   * scheduleFrame: programa el siguiente setTimeout INMEDIATAMENTE
+  //     (sin await), de modo que el intervalo real sea `gap`, no
+  //     `gap + tiempo_async`. Antes loop() se llamaba al final del callback
+  //     async; como sendFrame duraba ~80 ms (imagen base64 incluida), el
+  //     intervalo efectivo era 33+80 = 113 ms → ~9 fps. Ahora gap se respeta
+  //     al milisegundo y el display sube a 30 fps reales.
+  //   * sendFrame: el trabajo async (encode → fetch → draw) corre en paralelo.
+  //     cam.busy impide solapar peticiones: si el frame anterior ya terminó
+  //     (9-12 ms << 33 ms de gap), se envía el siguiente; si no, se salta ese
+  //     tick y se intenta el siguiente.
+  async function sendFrame() {
+    cam.busy = true;
+    try {
+      if (!v.videoWidth) throw new Error('se perdió la señal de vídeo');
+      ctx.drawImage(v, 0, 0, cv.width, cv.height);
+      // Envío a 960 px: el modelo hace letterbox a imgsz=640 de todos modos,
+      // así que mandar 1280 duplicaba el JPEG (encode ~20 ms vs ~7 ms a 960 px)
+      // sin ganar precisión. 960 px cabe casi 1:1 en el ancho del contenedor
+      // (~944 px) gracias a CSS max-width:100%, así que el canvas no se achica
+      // al cambiar de modo y no hay estiramiento ni borrura. A 640 px el canvas
+      // quedaba pequeño (2/3 del ancho) y estirarlo con CSS pixelaba el video.
+      let w = cv.width, h = cv.height;
+      if (w > LIVE_W) { h = Math.round(h * LIVE_W / w); w = LIVE_W; }
+      if (w !== cv.width) {
+        small.width = w; small.height = h;
+        sctx.drawImage(cv, 0, 0, w, h);
+      } else { small.width = w; small.height = h; sctx.drawImage(cv, 0, 0); }
+      const blob = await new Promise(r => small.toBlob(r, 'image/jpeg', 0.8));
+      if (!blob) throw new Error('el canvas no se pudo convertir en imagen');
+      // Cuerpo binario crudo: evita el parser multipart de Werkzeug, que
+      // con un JPEG de ~50 KB costaba ~17 ms por fotograma. A 960 px el
+      // blob pesa ~12 KB y el envío + decode quedan por debajo de 5 ms.
+      // #fast es SR en vivo: OFF (default) = live fluido 30 fps sin SR; ON =
+      // SR 4× (lento ~1 fps). El display es asíncrono: repinta el último
+      // SR+cajas a 30 fps (se permite retardo). Se purga el frame-by-frame.
+      const sr = $('#fast').checked ? 1 : 0;
+      const r = await fetch('/api/frame?conf=' + $('#ccam').value +
+          '&overlay=0&sync=0&sr=' + sr,
+          {method:'POST', headers:{'Content-Type':'image/jpeg'}, body: blob});
+      const d = await readJson(r);
+      if (d.error) throw new Error(d.error);
+      // En modo SR on-demand (checkbox SR en vivo) el servidor devuelve
+      // el frame super-resuelto 4× como `image` en base64: se dibuja ese
+      // lienzo para mostrar la SR. En modo normal (sin SR) el servidor
+      // NO envía la imagen (el live a 30 fps sin ella), así que se usa el
+      // frame nativo capturado aqui en el canvas `small`.
+      if (d.image) {
+        const img = new Image();
+        img.onload = () => drawBoxes(img, disp, d);
+        const b64 = /^[0-9a-f]+$/i.test(d.image) ? hexToB64(d.image) : d.image;
+        img.src = 'data:image/jpeg;base64,' + b64;
+      } else {
+        drawBoxes(small, disp, d);
+      }
+      $('#camrisk').innerHTML = riskBox(d.summary) + `
+          <div class="stat"><span>Inferencia</span><b>${d.timing.predict} ms</b></div>
+          <div class="stat"><span>Dibujo</span><b>${d.timing.draw} ms</b></div>
+          <div class="stat"><span>Identidades</span><b>${d.tracks||0}</b></div>` +
+          riskPanels(d);
+      cam.err = null; cam.ok = true;
+    } catch (e) {
+      // los errores se muestran en pantalla: antes se ignoraban y la
+      // imagen se quedaba en negro sin explicar nada
+      cam.err = e.message || String(e);
+    }
+    cam.last = performance.now();
+    cam.sent++;
+    // fps medidos sobre frames realmente completados, no sobre el
+    // intervalo de envio: asi se ve el rendimiento real
+    if (!cam.t0) cam.t0 = cam.last;
+    if (cam.last - cam.t0 > 500) {
+      cam.fps = cam.sent / ((cam.last - cam.t0) / 1000);
+      cam.sent = 0; cam.t0 = cam.last;
+      setStat();
+    } else if (cam.err) setStat();
+    cam.busy = false;
+  }
+
+  // ScheduleFrame programa el próximo setTimeout de inmediato (sin await),
+  // respetando `gap` como intervalo real. sendFrame corre en paralelo.
+  const scheduleFrame = () => {
     if (!cam.on) return;
-    // La camara se captura al ritmo elegido y se encola TOA. El servidor
-    // descarta los fotogramas que no puede procesar (deja 3 en cola), asi que
-    // lo que acaba viendo son los MAS RECIENTES y no una muestra espaciada.
-    //
-    // Antes el envio estaba limitado a 10 fps mientras el motor procesa unos
-    // 20: la maquina veia uno de cada tres fotogramas de los que muestras, y
-    // un estado transitorio de menos de 200 ms se le escapaba entero. Con
-    // captura a 30 y descarte por saturacion, el motor ve practicamente
-    // todos los fotogramas que le da tiempo a mirar.
     const gap = +$('#rate').value;
-    setTimeout(async () => {
+    setTimeout(() => {
       if (!cam.on) return;
       if (!cam.busy) {
-        cam.busy = true;
-        try {
-          if (!v.videoWidth) throw new Error('se perdió la señal de vídeo');
-          ctx.drawImage(v, 0, 0, cv.width, cv.height);
-          // Se recorta el frame antes de enviarlo. El modelo hace letterbox a
-          // 640 de todos modos, asi que mandar la imagen a resolucion nativa
-          // solo cuesta ancho de banda y tiempo de decodificacion en el
-          // servidor. A 640 de ancho el frame pesa varias veces menos.
-          // 1280 y no 640: el modelo hace letterbox a 640 de todos modos, asi
-          // que el ancho extra no cuesta inferencia, y el lienzo se dibuja a
-          // tamaño nativo en vez de estirarse y verse borroso
-          let w = cv.width, h = cv.height;
-          if (w > 1280) { h = Math.round(h * 1280 / w); w = 1280; }
-          if (w !== cv.width) {
-            small.width = w; small.height = h;
-            sctx.drawImage(cv, 0, 0, w, h);
-          } else { small.width = w; small.height = h; sctx.drawImage(cv, 0, 0); }
-          const blob = await new Promise(r => small.toBlob(r, 'image/jpeg', 0.8));
-          if (!blob) throw new Error('el canvas no se pudo convertir en imagen');
-          // Cuerpo binario crudo: evita el parser multipart de Werkzeug, que
-          // con un JPEG de ~50 KB costaba ~17 ms por fotograma.
-          // Modo sincrono por defecto: las cajas van alineadas con lo que se
-          // ve. El modo rapido no espera al motor y llega a ~110 fps, pero
-          // entonces las cajas se dibujan sobre el frame actual con datos de
-          // fotogramas anteriores y se ven retrasadas.
-          // #fast es SR en vivo: OFF (default) = live fluido 30 fps sin SR; ON =
-          // SR 4× (lento ~1 fps). El display es asíncrono: repinta el último
-          // SR+cajas a 30 fps (se permite retardo). Se purga el frame-by-frame.
-          const sr = $('#fast').checked ? 1 : 0;
-          const r = await fetch('/api/frame?conf=' + $('#ccam').value +
-              '&overlay=0&sync=0&sr=' + sr,
-            {method:'POST', headers:{'Content-Type':'image/jpeg'}, body: blob});
-          const d = await readJson(r);
-          if (d.error) throw new Error(d.error);
-          // El servidor devuelve el frame super-resuelto (SR 4×) como `image`
-          // en base64 SOLO cuando el SR está activo (?sr=1): se dibuja ese
-          // lienzo en vez del frame nativo para que el display muestre la SR.
-          // Cuando el SR está OFF (`live normal`), el servidor no envía imagen:
-          // re-enviar el frame nativo re-encodado como JPEG cuesta ~15-25 ms de
-          // decode por fotograma en el hilo principal y rompe 30 fps. Sin
-          // imagen, el navegador dibuja el frame ya capturado (`small`) y
-          // superpone las cajas, manteniendo fluidez.
-          if (d.image) {
-            const img = new Image();
-            img.onload = () => drawBoxes(img, disp, d);
-            // El servidor envía la SR ya en base64 (rápido: el navegador la
-            // decodifica nativamente). Se acepta hex por si acaso para no
-            // romper respuestas antiguas: hex es puramente [0-9a-f].
-            const b64 = /^[0-9a-f]+$/i.test(d.image) ? hexToB64(d.image) : d.image;
-            img.src = 'data:image/jpeg;base64,' + b64;
-          } else {
-            drawBoxes(small, disp, d);
-          }
-          $('#camrisk').innerHTML = riskBox(d.summary) + `
-            <div class="stat"><span>Inferencia</span><b>${d.timing.predict} ms</b></div>
-            <div class="stat"><span>Dibujo</span><b>${d.timing.draw} ms</b></div>
-            <div class="stat"><span>Identidades</span><b>${d.tracks||0}</b></div>` +
-            riskPanels(d);
-          cam.err = null; cam.ok = true;
-        } catch (e) {
-          // los errores se muestran en pantalla: antes se ignoraban y la
-          // imagen se quedaba en negro sin explicar nada
-          cam.err = e.message || String(e);
-        }
-        cam.last = performance.now();
-        cam.sent++;
-        // fps medidos sobre frames realmente completados, no sobre el
-        // intervalo de envio: asi se ve el rendimiento real
-        if (!cam.t0) cam.t0 = cam.last;
-        if (cam.last - cam.t0 > 500) {
-          cam.fps = cam.sent / ((cam.last - cam.t0) / 1000);
-          cam.sent = 0; cam.t0 = cam.last;
-          setStat();
-        } else if (cam.err) setStat();
-        cam.busy = false;
+        sendFrame();  // fire: no se espera, scheduleFrame sigue
       }
-      loop();
+      scheduleFrame();  // ← INMEDIATO, no al final del async
     }, Math.max(0, gap));
   };
-  loop();
+  scheduleFrame();
   cam.video = v;
 };
 
