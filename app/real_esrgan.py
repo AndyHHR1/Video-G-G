@@ -60,6 +60,11 @@ class RealESRGAN:
                                # codificador JPEG; 1280 es suficiente para pantalla y
                                # YOLO (que encoge a 640 de todos modos). _MAX_INPUT*4
                                # == _MAX_OUTPUT, así que el cap casi nunca recorta.
+    _UPLOAD_INPUT = 640        # uploads/imagen/video (offline): entrada hasta 640 px
+                               # (4× puro: 640→2560). Calidad > velocidad, VRAM OK en
+                               # RTX 5050; videos grandes se escalan a 640 antes del 4×.
+    _UPLOAD_OUTPUT = 2560      # tope de salida offline. Evita 8K+ (foto 4K→16K)
+                               # agotando VRAM/codificador, manteniendo 4× real.
     _cache: dict[str, torch.nn.Module] = {}
 
     def __init__(self, model_path: str | os.PathLike = DEFAULT_MODEL,
@@ -102,16 +107,19 @@ class RealESRGAN:
         return self._cuda
 
     @torch.no_grad()
-    def enhance(self, frame: np.ndarray, fast: bool = False) -> np.ndarray:
+    def enhance(self, frame: np.ndarray, fast: bool = False,
+                for_upload: bool = False) -> np.ndarray:
         """Escala 4× un frame BGR uint8.
 
         Parámetros
         ----------
         ``frame``: array H×W×3, uint8, OpenCV BGR.
-         ``fast``: prioriza velocidad (entrada 112 px, ~90 ms) para flujos en vivo.
-         False prioriza calidad (entrada hasta 320 px, preservando aspecto) para
-         uploads/imagen/video; a 320 el output 4× llega a 1280 px con nitidez
-         real (~2.3× más nítido que el viejo cuadrado 224), a costa de ~463 ms.
+        ``fast``: prioriza velocidad (entrada 112 px, ~90 ms) para flujos en vivo.
+          False prioriza calidad (entrada hasta 320/640 px, preservando aspecto)
+          para uploads/imagen/video; a 320 el output 4× llega a 1280 px con nitidez
+          real (~2.3× más nítido que el viejo cuadrado 224), a costa de ~463 ms.
+        ``for_upload`` (offline): usa caps altos (entrada 640, salida 2560) para un
+          4× real en videos/fotos sin tocar el live, que mantiene el cap de 1280.
 
         Retorna
         ----------
@@ -130,7 +138,8 @@ class RealESRGAN:
         if fast or max(h, w) <= self._MODEL_SIZE:
             s = self._MODEL_SIZE
         else:
-            s = max(self._MODEL_SIZE, min(max(h, w), self._MAX_INPUT))
+            _max_in = self._UPLOAD_INPUT if for_upload else self._MAX_INPUT
+            s = max(self._MODEL_SIZE, min(max(h, w), _max_in))
         # Relacion de aspecto preservada en AMBOS modos: antes `fast` usaba un
         # cuadrado 112x112 que estiraba 16:9 y dejaba la SR en vivo borrosa.
         sc = s / max(h, w)
@@ -156,8 +165,9 @@ class RealESRGAN:
         # Se topa la salida a _MAX_OUTPUT manteniendo aspect-ratio; _MAX_INPUT*4 ==
         # _MAX_OUTPUT, así que normalmente `out` ya cabe en el tope sin recortar.
         target_w, target_h = w * 4, h * 4
-        if max(target_h, target_w) > self._MAX_OUTPUT:
-            sc = self._MAX_OUTPUT / max(target_h, target_w)
+        _max_out = self._UPLOAD_OUTPUT if for_upload else self._MAX_OUTPUT
+        if max(target_h, target_w) > _max_out:
+            sc = _max_out / max(target_h, target_w)
             target_w = max(1, int(target_w * sc))
             target_h = max(1, int(target_h * sc))
         if (out.shape[0], out.shape[1]) != (target_h, target_w):

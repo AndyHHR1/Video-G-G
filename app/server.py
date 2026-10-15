@@ -196,7 +196,8 @@ class Inferencer:
                         force=out.get("force", False),
                         allow_alerts=out.get("allow_alerts", True),
                         fast=out.get("fast", False),
-                        sr=out.get("sr", True))
+                        sr=out.get("sr", True),
+                        for_upload=out.get("for_upload", False))
                     # El ultimo resultado se guarda SIEMPRE, no solo en modo
                     # asincrono. Antes se guardaba bajo `if self._async`, pero
                     # la peticion restaura `_async = False` en su `finally`
@@ -222,7 +223,7 @@ class Inferencer:
                 out["done"].set()
 
     def _job(self, image, conf, imgsz, draw=True, force=False,
-             allow_alerts=True, fast=False, sr=True):
+             allow_alerts=True, fast=False, sr=True, for_upload=False):
         """Motor completo + dibujo, ambos dentro del hilo trabajador.
 
         El dibujo tambien se hace aqui a proposito: medir en esta maquina
@@ -239,13 +240,8 @@ class Inferencer:
         # `sr=False` para fluidar (~15-20 fps de cajas): el 4× calidad en RTX 5050
         # dura ~0.8-1.2 s/frame, incompatible con 30 fps. SR bajo demanda
         # (?sr=1) o en uploads/imagen vía /api/detect (donde sr=True por defecto).
-        if sr and self._esrgan is None:
-            try:
-                self._esrgan = RealESRGAN(device=self._device)
-            except FileNotFoundError as exc:
-                print(f"  [aviso] Real-ESRGAN no disponible: {exc}")
         if self._esrgan is not None and sr:
-            image = self._esrgan.enhance(image, fast=fast)
+            image = self._esrgan.enhance(image, fast=fast, for_upload=for_upload)
         result = self._engine.step(image, force=force,
                                    allow_alerts=allow_alerts)
         t_predict = (time.perf_counter() - t0) * 1000
@@ -291,7 +287,7 @@ class Inferencer:
 
     def detect(self, image: np.ndarray, conf: float, imgsz: int, draw: bool = True,
                force: bool = False, allow_alerts: bool = True, fast: bool = False,
-               sr: bool = True):
+               sr: bool = True, for_upload: bool = False):
         """Encola el trabajo y espera el resultado.
 
         En modo asincrono devuelve de inmediato el ultimo resultado disponible
@@ -305,7 +301,8 @@ class Inferencer:
         a 30 fps (SR on-demand ?sr=1 o /api/detect de uploads).
         """
         out = {"done": threading.Event(), "no_draw": not draw, "force": force,
-               "allow_alerts": allow_alerts, "fast": fast, "sr": sr}
+               "allow_alerts": allow_alerts, "fast": fast, "sr": sr,
+               "for_upload": for_upload}
         # "Solo el ultimo frame importa": si el motor no llega al ritmo de la
         # webcam, la cola crece y el resultado llega cada vez mas rancio. Se
         # descartan los frames en espera cuando se acumulan.
@@ -514,7 +511,7 @@ def api_detect():
     # obstaculos solo se evaluan en los fotogramas que tocan su cadencia, y al
     # recargar la misma imagen no cambia nada: la escena es la misma.
     annotated, result, dets, timing = _inferencer.detect(
-        image, conf, imgsz, draw=True, force=True, allow_alerts=False, sr=True)
+        image, conf, imgsz, draw=True, force=True, allow_alerts=False)
     t_all = (time.perf_counter() - t0) * 1000
     t_enc = time.perf_counter()
     payload = encode_jpeg(annotated).hex()
@@ -911,7 +908,7 @@ def api_video():
             if not ok:
                 break
             t0 = time.perf_counter()
-            annotated, result, _d, _t = _inferencer.detect(frame, conf, imgsz, sr=True)
+            annotated, result, _d, _t = _inferencer.detect(frame, conf, imgsz, sr=True, for_upload=True)
             engine._video_frame_no = frames  # frame actual (0-indexed)
             t_infer += time.perf_counter() - t0
             frames += 1
@@ -1155,7 +1152,7 @@ def main() -> None:
     print("  precalentando inferencia (cold start)...")
     try:
         _inferencer.detect(np.zeros((320, 320, 3), np.uint8), args.conf, args.imgsz,
-                           draw=False, force=True, allow_alerts=False, sr=False)
+                           draw=False, force=True, allow_alerts=False)
     except Exception as exc:  # noqa: BLE001
         print(f"  warmup omitido: {exc}")
     # Limpio el frame de test del warmup: que el primer frame en vivo no devuelva
