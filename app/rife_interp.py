@@ -141,5 +141,9 @@ class RIFEInterpolator:
                 if f.shape[0] != h or f.shape[1] != w:
                     f = f[pt:pt + h, pl:pl + w]
                 f = np.clip(f * 255.0, 0, 255).astype(np.uint8)
+                # RIFE produce RGB (entrenado con PIL). El pipeline usa OpenCV
+                # (BGR): encode_b64 → cv2.imencode espera BGR. Si se devuelve
+                # RGB, cv2 lo interpreta como BGR → shift cromático (output azul).
+                f = f[:, :, ::-1]
                 out.append(f)
         return out

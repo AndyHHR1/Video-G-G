@@ -388,6 +388,12 @@ class Inferencer:
                         and self._interp_buffer[0][0] <= now):
                     _, interp_val = self._interp_buffer.pop(0)
             if interp_val is not None:
+                # Actualizar _last_async como fallback: si el buffer se vacía,
+                # el display debe estar en el último frame interpolado, no en
+                # el key-frame SR (que está desfasado). Sin esto el display
+                # "salta" volviendo al key-frame entre interp frames.
+                with self._lock_async:
+                    self._last_async = interp_val
                 return interp_val
             with self._lock_async:
                 return self._last_async
