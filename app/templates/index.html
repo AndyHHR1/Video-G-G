@@ -746,9 +746,11 @@ $('#bcam').onclick = async () => {
           <div class="stat"><span>Identidades</span><b>${d.tracks||0}</b></div>` +
           riskPanels(d);
       cam.err = null;
-      if (!cam.ok) {
-        setStat();  // actualiza inmediatamente después del primer frame exitoso
+      if (!cam.ok && cam.on) {
+        setStat();
         // Actualizar estado de botones: el live funciona, ahora se puede detener.
+        // El check de cam.on evita race con stopCam: si stopCam corre mientras
+        // sendFrame aún procesa, no sobre-escribe el reseteo del botón.
         $('#bcam').textContent = 'Conectado';
         $('#bstop').disabled = false;
       }
