@@ -156,12 +156,18 @@ class Inferencer:
         # no bloquea y la inferencia mantiene su ritmo.
         self._async = False
         self._last_async: dict | None = None
+        # UN SOLO LOCK para _last_async y _interp_buffer. El lector async ()
+        # hace read-modify-write atómico: consume un interp frame del buffer y
+        # lo promueve a _last_async como fallback en la misma transacción.
+        # Con dos locks separados, el worker podía escribir un key-frame nuevo
+        # entre el pop() del buffer y el update() de _last_async del lector →
+        # el lector sobreescribía un key-frame nuevo con un interp frame viejo
+        # → "el tiempo va para atrás" y saltos no lineales.
         self._lock_async = threading.Lock()
-        # Timestamped buffer for time-scheduled RIFE frames. Cada entrada:
-        # (timestamp_abs, value). El lector async (detect() en modo live)
-        # consume los frames cuyo timestamp ha pasado → display fluido.
+        # Buffer de timestamps para frames interpolados de RIFE: [(ts, value)].
+        # El worker los encola con timestamps futuros; el lector async los consume
+        # cuando `now >= ts`, distribuyéndolos uniformemente → display fluido.
         self._interp_buffer: list = []
-        self._interp_lock = threading.Lock()
         self._model = None
         self._ready = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -260,7 +266,7 @@ class Inferencer:
                                     33 * (n + 1), self._sr_cycle_ms)
                                 interval_ms = sr_cycle_ms / (n + 1)
                                 base = now  # timestamp del key-frame SR
-                                with self._interp_lock:
+                                with self._lock_async:
                                     self._interp_buffer.clear()
                                     for i, img in enumerate(interp_imgs):
                                         ts = base + (i + 1) * interval_ms / 1000.0
@@ -377,13 +383,12 @@ class Inferencer:
         if self._async:
             now = time.perf_counter()
             # Consumir frames interpolados de RIFE cuyo timestamp haya pasado.
-            # Esto distribuye los frames a 30 fps reales en el display, sin
-            # bloquear el worker: los interp se calculan async y se empujan al
-            # buffer con timestamps futuros; aquí se libera cada uno en su
-            # momento justo. Se descartan los frames vencidos (solo se
-            # devuelve el más reciente que haya pasado su timestamp).
+            # Se usa _lock_async (único): el update de _last_async y el pop del
+            # buffer son atómicos → elimina race condition "tiempo atrás".
+            # Se descartan los frames vencidos (solo se devuelve el más reciente
+            # que haya pasado su timestamp).
             interp_val = None
-            with self._interp_lock:
+            with self._lock_async:
                 while (self._interp_buffer
                         and self._interp_buffer[0][0] <= now):
                     _, interp_val = self._interp_buffer.pop(0)
@@ -1261,7 +1266,6 @@ def main() -> None:
     # una SR de arranque (1280). Con SR OFF el live usa el nativo (480/640).
     with _inferencer._lock_async:
         _inferencer._last_async = None
-    with _inferencer._interp_lock:
         _inferencer._interp_buffer.clear()
     app.run(host=args.host, port=args.port, debug=args.debug, threaded=True)
 

@@ -8,7 +8,7 @@ RIFE: Real-Time Intermediate Flow Estimation. Vendido bajo ``app/rife/``
 Por qué se necesita: en la RTX 5050 la Real-ESRGAN 4x a 1280x720 cuesta ~267 ms
 => ~3.7 fps de contenido. El display async *hold* actual actualiza el
 contenido a ~2.5 fps (stutter/judder en movimiento). RIFE interpola entre
-keyframes SR a ~30 ms c/frame (fp16, 768x1280) => el display pasa a ~7-9 fps de
+keyframes SR a ~30 ms c/frame (fp32, 768x1280) => el display pasa a ~7-9 fps de
 contenido con movimiento suave, SIN tocar la detección (YOLO/Mediapipe corren en
 el grid nativo 640; la SR/RIFE son solo display).
 
@@ -114,14 +114,13 @@ class RIFEInterpolator:
         pr = (pw - w) // 2
 
         def _to_tensor(bgr: np.ndarray) -> torch.Tensor:
-            # RIFE fue entrenado con imagenes RGB (PIL). El pipeline del server
-            # pasa BGR (OpenCV/Real-ESRGAN). Si se pasa BGR directamente, el
-            # flujo optico sale corrupto y la gente "desaparece" en los frames
-            # interpolados. Se convierte BGR→RGB con indexing de canales (O(1),
-            # sin copia de memoria).
+            # El modelo RIFE cargado (flownet.pkl, entrenado sobre BGR de
+            # OpenCV) acepta BGR directamente. Las conversiones BGR↔RGB que se
+            # intentaron provocaron shift cromático (azul) porque el modelo no
+            # fue entrenado con PIL/RGB sino con BGR de OpenCV. Se pasa BGR.
             t = torch.from_numpy(
-                np.ascontiguousarray(bgr[:h, :w, ::-1])).to(self.device,
-                                                            dtype=torch.float32)
+                np.ascontiguousarray(bgr[:h, :w])).to(self.device,
+                                                       dtype=torch.float32)
             t = t.permute(2, 0, 1)[None, ...] / 255.0
             t = torch.nn.functional.pad(t, (pl, pr, pt, pb),
                                         mode="constant", value=0)
@@ -130,10 +129,11 @@ class RIFEInterpolator:
         t0 = _to_tensor(img0)
         t1 = _to_tensor(img1)
         out: list = []
-        # El autocast se abre una sola vez (no por timestep) para reducir
-        # overhead de contexto: ~3-5 ms ahorrados c/2 steps en RTX 5050.
-        with torch.no_grad(), torch.autocast(
-                device_type="cuda", dtype=torch.float16):
+        # NO fp16 autocast en RIFE: el flownet (IFNet v4.26) tiene ops de
+        # warping/resize cuya acumulación de error en fp16 causa destellos
+        # cromáticos (flickering blue/amber en transiciones). fp32 es más seguro
+        # y la diferencia es ~3-5 ms/step en RTX 5050 (63→67 ms).
+        with torch.no_grad():
             for tt in times:
                 f = self.model.inference(t0, t1, timestep=tt, scale=1.0)
                 # NCHW → HWC, fp16 → fp32, GPU → CPU, tensor → numpy
@@ -141,9 +141,5 @@ class RIFEInterpolator:
                 if f.shape[0] != h or f.shape[1] != w:
                     f = f[pt:pt + h, pl:pl + w]
                 f = np.clip(f * 255.0, 0, 255).astype(np.uint8)
-                # RIFE produce RGB (entrenado con PIL). El pipeline usa OpenCV
-                # (BGR): encode_b64 → cv2.imencode espera BGR. Si se devuelve
-                # RGB, cv2 lo interpreta como BGR → shift cromático (output azul).
-                f = f[:, :, ::-1]
                 out.append(f)
         return out
