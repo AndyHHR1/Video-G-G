@@ -131,7 +131,9 @@ class Inferencer:
     def __init__(self, weights: str, device: int | str = "auto",
                  obstacle_weights: str = "yolov8s.pt", conf: float = 0.25,
                  enable_esrgan: bool = False, enable_rife: bool = False,
-                 rife_steps: int = 2):
+                 rife_steps: int = 2,
+                 rife_motion_threshold: float = 0.05,
+                 rife_max_size: int = 640):
         self._weights = weights
         self._device = device
         self._obstacle_weights = obstacle_weights
@@ -139,6 +141,8 @@ class Inferencer:
         self._enable_esrgan = enable_esrgan
         self._enable_rife = enable_rife
         self._rife_steps = rife_steps
+        self._rife_motion_threshold = rife_motion_threshold
+        self._rife_max_size = rife_max_size
         self._esrgan: RealESRGAN | None = None
         self._rife: "RIFEInterpolator | None" = None
         self._prev_sr_frame: np.ndarray | None = None
@@ -209,7 +213,12 @@ class Inferencer:
         # ESGRAN/YOLO). Si falla, ready=False y el live SR mantiene el hold.
         if self._enable_rife:
             from rife_interp import RIFEInterpolator
-            self._rife = RIFEInterpolator(device=self._device)
+            # motion_threshold: 5% (ajustable). max_size: RIFE inferencia a
+            # 640px (no full-res SR), ~3× más rápido sin perder fluidez visible.
+            self._rife = RIFEInterpolator(
+                device=self._device,
+                motion_threshold=self._rife_motion_threshold,
+                max_size=self._rife_max_size)
         self._ready.set()
         while True:
             job = self._q.get()
@@ -251,11 +260,11 @@ class Inferencer:
                         self._interp_buffer.clear()
                         self._key_frame_time = key_time
                     # RIFE: interpolación entre key-frames SR para alisar el
-                    # display. El SR 4× (~145 ms + ~50 ms detección) da ~3.7 fps;
-                    # RIFE inserta `rife_steps` frames intermedios (~67 ms c/uno
-                    # en RTX 5050, fp32). Las cajas provienen de la key-frame SR
-                    # (detección sobre grid nativo 640); los frames interpolados
-                    # reusan esas cajas. Solo en modo async (live).
+                    # display. El SR 4× (~145 ms + ~50 ms detección) da ~3.7 fps
+                    # en RTX 5050; RIFE en resolución reducida (~640 p, ~50 ms
+                    # por interp) eleva a ~10-12 fps. Las cajas provienen de la
+                    # key-frame SR (detección sobre grid nativo 640); los frames
+                    # interpolados reusan esas cajas. Solo en modo async (live).
                     #
                     # Timestamps PEEK: los interp se encolan con timestamps
                     # futuros (key_time + i*interval); el reader hace peek del
@@ -1214,12 +1223,20 @@ def main() -> None:
                          "(~+120 ms/frame en RTX 5050).")
     ap.add_argument("--rife", action="store_true",
                     help="Interpolación RIFE entre key-frames SR en vivo: eleva "
-                         "el display de ~3.7 fps a ~7-9 fps (2 steps, ~63 ms/interp "
-                         "en RTX 5050). Requiere --esrgan y GPU CUDA. Las cajas provienen "
-                         "de la key-frame SR; los frames interpolados son display-only.")
+                         "el display de ~3.7 fps a ~10-12 fps (2 steps a 640px, "
+                         "~50 ms/interp en RTX 5050). Requiere --esrgan y GPU CUDA. "
+                         "Las cajas provienen de la key-frame SR; los frames interpolados "
+                         "son display-only. Umbral de movimiento 5% (ajustable).")
     ap.add_argument("--rife-steps", type=int, default=2, choices=[1, 2, 3],
                     help="Frames intermedios RIFE entre cada key-frame SR (default 2). "
-                         "Más steps = más fps pero más carga GPU.")
+                         "Más steps = más fps pero mais carga GPU.")
+    ap.add_argument("--rife-motion-threshold", type=float, default=0.05,
+                    help="Umbral de dif. absoluta (0-1) entre key-frames SR. "
+                         "RIFE salta la interp. encima de este umbral (default 0.05=5%). "
+                         "Subir para más interp (más artefactos); bajar para menos (más hold).")
+    ap.add_argument("--rife-max-size", type=int, default=640,
+                    help="Resolución máxima para inferencia RIFE (default 640). "
+                         "Mayor = mejor calidad, más lento. 640 px es ~3× más rápido que full-res.")
     args = ap.parse_args()
 
     weights = Path(args.weights)
@@ -1255,6 +1272,8 @@ def main() -> None:
         enable_esrgan=args.esrgan,
         enable_rife=args.rife and args.esrgan,
         rife_steps=args.rife_steps,
+        rife_motion_threshold=args.rife_motion_threshold,
+        rife_max_size=args.rife_max_size,
     )
     print("  modelo listo")
     # Precalentar la inferencia fría: la primera llamada a RiskEngine inicializa
