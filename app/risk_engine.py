@@ -1128,7 +1128,7 @@ class RiskEngine:
             if es_la_pose:
                 name, conf_p, origen = geom, 0.55, "geometria de pose"
             elif run_class or not self._last_class \
-                    or abs(self._last_class[0][0] - box[0]) > 24:
+                    or abs(self._last_class[0][0] - box[0]) > 64:
                 name, conf_p = self._classify_person(frame, box)
                 self._last_class = (tuple(box), name, conf_p)
                 origen = "modelo"

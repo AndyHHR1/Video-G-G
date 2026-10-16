@@ -178,15 +178,16 @@ class Inferencer:
             anonymize=True,
             pose_every=8, people_every=6,
             stairs_every=13, obstacle_every=11, classify_every=6,
+            person_conf=0.20,
         )
-        # Real-ESRGAN: super-resolución 4× (solo si --esrgan).  Se carga
-        # DENTRO del hilo trabajador para que el contexto CUDA se cree y
+        # Real-ESRGAN: super-resolución 4× (solo si --esrGAN).  Se carga
         # quede ligado a este mismo hilo (igual que YOLO).
         if self._enable_esrgan:
             self._esrgan = RealESRGAN(device=self._device)
         try:
             import numpy as _np
-            _wu = _np.zeros((480, 640, 3), _np.uint8)
+            _wu = _np.full((540, 960, 3), 120, _np.uint8)
+            _wu[130:460, 300:430] = 40
             self._engine.step(_wu, force=True, allow_alerts=False)
             self._engine.step(_wu, force=True, allow_alerts=False)
             self._engine.step(_wu, force=False, allow_alerts=False)
@@ -1180,11 +1181,16 @@ def main() -> None:
     )
     print("  modelo listo")
     # Precalentar la inferencia fría: la primera llamada a RiskEngine inicializa
-    # MediaPipe/pose (~5 s). Se fuerza un frame de test para que el primer frame
-    # en vivo no pague ese coste al usuario (el live se siente fluido al instante).
+    # MediaPipe/pose (~10 s) y carga el grafo TFLite solo si el frame tiene
+    # contenido real (un `np.zeros` no dispara la carga completa del intérprete
+    # y el primer frame en vivo pagaba ese coste al usuario). Se fuerza un frame
+    # con contenido (figura humana) a la resolución real del live (960×540) para
+    # que el primer frame en vivo no haga stall.
     print("  precalentando inferencia (cold start)...")
     try:
-        _inferencer.detect(np.zeros((320, 320, 3), np.uint8), args.conf, args.imgsz,
+        _wu = np.full((540, 960, 3), 120, np.uint8)
+        _wu[130:460, 300:430] = 40
+        _inferencer.detect(_wu, args.conf, args.imgsz,
                            draw=False, force=True, allow_alerts=False)
     except Exception as exc:  # noqa: BLE001
         print(f"  warmup omitido: {exc}")

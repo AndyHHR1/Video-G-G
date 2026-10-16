@@ -318,7 +318,7 @@ function riskPanels(d) {
   h += `<div class="card" style="margin-bottom:12px">
     <h2>Obstáculos en la escalera · RQF02 (1)</h2>`;
   h += obs.length
-    ? '<table>' + obs.map(o=>`<tr><td>${o.objeto}</td><td>${(o.conf*100).toFixed(0)}%</td>
+    ? '<table>' + obs.map(o=>`<tr><td>${o.objeto}</td>
         <td class="req">${o.tipo === 'telefono' ? 'RQF02 (3) móvil'
             : o.riesgo === 'ALTO' ? 'obstáculo' : 'escena'}</td></tr>`).join('') + '</table>'
     : '<div class="req">Ningún objeto detectado sobre el escalón.</div>';
@@ -329,7 +329,7 @@ function riskPanels(d) {
     <h2>Postura yTransitSafe · RQF02 (2)(3)</h2>`;
   h += pos.length
     ? '<table>' + pos.map(p=>`<tr><td>${p.tipo.replace(/_/g,' ')}</td>
-        <td>${(p.conf*100).toFixed(0)}%</td><td>${p.ref}</td></tr>`).join('') + '</table>'
+        <td>${p.ref}</td></tr>`).join('') + '</table>'
     : '<div class="req">Sin señales de pasamanos, distracción ni tambaleo.</div>';
   h += '</div>';
   // RQF07 alertas
@@ -369,7 +369,7 @@ function detTable(dets) {
     const caja = Array.isArray(d.bbox)
       ? d.bbox.join(', ')
       : '<span class="req">' + (d.ref || '—') + '</span>';
-    h += `<tr><td>${nombre}</td><td>${(conf * 100).toFixed(0)}%</td>
+    h += `<tr><td>${nombre}</td>
           <td>${d.risk || '—'}</td><td class="req">${caja}</td></tr>`;
   }
   return h + '</table>';
@@ -478,7 +478,7 @@ function drawBoxes(src, dst, d) {
     const x2 = b.bbox[2]*dst.width, y2 = b.bbox[3]*dst.height;
     c.strokeStyle = col; c.lineWidth = 2;
     c.strokeRect(x1, y1, x2-x1, y2-y1);
-    const t = `${b.class_name} ${(b.confidence*100).toFixed(0)}%`;
+    const t = `${b.class_name}`;
     c.font = '13px system-ui,sans-serif';
     const tw = c.measureText(t).width;
     c.fillStyle = col;
@@ -709,7 +709,11 @@ $('#bcam').onclick = async () => {
         sctx.drawImage(cv, 0, 0, w, h);
       } else { small.width = w; small.height = h; sctx.drawImage(cv, 0, 0); }
       const blob = await new Promise(res => {
-        const t = setTimeout(() => res(null), 500);  // safety: 500ms timeout
+        // Safety: si el hilo principal está bloqueado (GC / decode / inferencia
+        // S7) el callback de toBlob se retrasa. 500 ms quedaba justo y saltaba
+        // "canvas no pudo cargar imagen" por ratos; 1500 ms da holgura sin
+        // tocar el pacer (~100 ms) — solo interesa cuando está bloqueado.
+        const t = setTimeout(() => res(null), 1500);
         small.toBlob(b => { clearTimeout(t); res(b); }, 'image/jpeg', 0.8);
       });
       if (!blob) throw new Error('el canvas no se pudo convertir en imagen');
@@ -807,7 +811,7 @@ async function cargarAlertas() {
         <div class="alert-tipo">${(a.risk_type||'').replace(/_/g,' ')}
           <span class="badge">${SEV_TXT[a.severity]||a.severity}</span></div>
         <div class="alert-meta">${(a.timestamp||'').replace('T',' ')} · ${a.duration_s}s ·
-          id ${a.track_id} · conf ${((a.confidence||0)*100).toFixed(0)}%</div>
+           id ${a.track_id}</div>
         <div class="alert-meta">${a.risk_ref||''}</div>
         ${a.description ? `<div class="alert-desc">${a.description}</div>` : ''}
       </div>
