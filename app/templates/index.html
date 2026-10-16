@@ -656,6 +656,8 @@ $('#bcam').onclick = async () => {
   const ctx = cv.getContext('2d');
   // segundo canvas, ya escalado, que es el que se envia
   const small = document.createElement('canvas');
+  small.width = v.videoWidth > LIVE_W ? LIVE_W : v.videoWidth;
+  small.height = Math.round(v.videoHeight * small.width / v.videoWidth);
   const sctx = small.getContext('2d');
   // canvas de SALIDA: backing store fijo a LIVE_W (960 px), casi el ancho
   // del contenedor (~944 px). El envío al servidor también es a 960 px
@@ -744,7 +746,9 @@ $('#bcam').onclick = async () => {
           <div class="stat"><span>Dibujo</span><b>${d.timing.draw} ms</b></div>
           <div class="stat"><span>Identidades</span><b>${d.tracks||0}</b></div>` +
           riskPanels(d);
-      cam.err = null; cam.ok = true;
+      cam.err = null;
+      if (!cam.ok) setStat();  // actualiza inmediatamente después del primer frame exitoso
+      cam.ok = true;
   } catch (e) {
       // los errores se muestran en pantalla: antes se ignoraban y la
       // imagen se quedaba en negro sin explicar nada
