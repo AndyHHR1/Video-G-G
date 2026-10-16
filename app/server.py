@@ -146,6 +146,7 @@ class Inferencer:
         self._esrgan: RealESRGAN | None = None
         self._rife: "RIFEInterpolator | None" = None
         self._prev_sr_frame: np.ndarray | None = None
+        self._prev_dets: list | None = None  # para gate de estabilidad
         # Estimación del ciclo SR (wall-clock entre key-frames) para programar
         # los interpolados de RIFE. EMA con α=0.3.
         self._sr_cycle_ms: float = 267.0
@@ -245,12 +246,16 @@ class Inferencer:
                     # siempre vacio y la camara en vivo no devolvia NUNCA
                     # detecciones (siempre `pendiente: true`).
                     key_time = time.perf_counter()
-                    # Medir ciclo SR (wall-clock entre key-frames) para timestamps.
-                    if self._last_sr_key_time > 0:
-                        cycle = (key_time - self._last_sr_key_time) * 1000.0
-                        self._sr_cycle_ms = (
-                            0.7 * self._sr_cycle_ms + 0.3 * cycle)
-                    self._last_sr_key_time = key_time
+                    # Sólo track del ciclo SR cuando el job usa SR: en modo
+                    # normal (~40 ms/cycle) ensucia el EMA y, al volver a SR,
+                    # los interp se timestampean a 13 ms (muy adelantados) →
+                    # frames vencidos que "salta" el browser leyendo buffer viejo.
+                    if out.get("sr"):
+                        if self._last_sr_key_time > 0:
+                            cycle = (key_time - self._last_sr_key_time) * 1000.0
+                            self._sr_cycle_ms = (
+                                0.7 * self._sr_cycle_ms + 0.3 * cycle)
+                        self._last_sr_key_time = key_time
                     with self._lock_async:
                         self._last_async = out["value"]
                         # Limpiar interps vencidos del ciclo anterior.
@@ -274,7 +279,32 @@ class Inferencer:
                     if (self._rife is not None and self._rife.ready
                             and out.get("sr") and out.get("async")):
                         annotated, result, detections, timing = out["value"]
-                        if self._prev_sr_frame is not None:
+                        # Gate de estabilidad de detecciones: RIFE warpea entre
+                        # dos key-frames SR; si una persona entra/sale o cambia
+                        # de posición drásticamente, el flow estimation de RIFE
+                        # produce artefactos (persona fantasma/parcialmente
+                        # desaparecida). Se salta la interp cuando:
+                        #   1) el número de detecciones cambió en >1, o
+                        #   2) la posición del centroide colectivo cambió >15%.
+                        prev_dets = getattr(self, "_prev_dets", None)
+                        skip_rife = False
+                        if prev_dets is not None:
+                            if len(dets) != len(prev_dets) and \
+                               abs(len(dets) - len(prev_dets)) > 1:
+                                skip_rife = True
+                            elif dets and prev_dets:
+                                # Comparar centroides de cajas
+                                c0 = np.mean([b["bbox"][:2] for b in prev_dets
+                                              if "bbox" in b], axis=0) \
+                                    if any("bbox" in d for d in prev_dets) \
+                                    else np.array([0, 0])
+                                c1 = np.mean([b["bbox"][:2] for b in dets
+                                              if "bbox" in b], axis=0) \
+                                    if any("bbox" in d for d in dets) \
+                                    else np.array([0, 0])
+                                if np.linalg.norm(c1 - c0) > 0.15:
+                                    skip_rife = True
+                        if not skip_rife and self._prev_sr_frame is not None:
                             interp_imgs = self._rife.interp(
                                 self._prev_sr_frame, annotated,
                                 num_steps=self._rife_steps)
@@ -290,6 +320,7 @@ class Inferencer:
                                             (ts, (img, result,
                                                   detections, timing)))
                         self._prev_sr_frame = annotated
+                        self._prev_dets = dets
             except BaseException as exc:          # noqa: BLE001
                 # `finally` en vez de `except`: si `out["done"]` no fuera un
                 # Event, el `.set()` lanzaba AttributeError y el hilo
@@ -1226,13 +1257,13 @@ def main() -> None:
                          "el display de ~3.7 fps a ~10-12 fps (2 steps a 640px, "
                          "~50 ms/interp en RTX 5050). Requiere --esrgan y GPU CUDA. "
                          "Las cajas provienen de la key-frame SR; los frames interpolados "
-                         "son display-only. Umbral de movimiento 5% (ajustable).")
+                         "son display-only. Umbral de movimiento 3% (ajustable).")
     ap.add_argument("--rife-steps", type=int, default=2, choices=[1, 2, 3],
                     help="Frames intermedios RIFE entre cada key-frame SR (default 2). "
                          "Más steps = más fps pero mais carga GPU.")
-    ap.add_argument("--rife-motion-threshold", type=float, default=0.05,
+    ap.add_argument("--rife-motion-threshold", type=float, default=0.03,
                     help="Umbral de dif. absoluta (0-1) entre key-frames SR. "
-                         "RIFE salta la interp. encima de este umbral (default 0.05=5%). "
+                         "RIFE salta la interp. encima de este umbral (default 0.03=3%). "
                          "Subir para más interp (más artefactos); bajar para menos (más hold).")
     ap.add_argument("--rife-max-size", type=int, default=640,
                     help="Resolución máxima para inferencia RIFE (default 640). "

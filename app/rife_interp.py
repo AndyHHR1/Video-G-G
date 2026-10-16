@@ -12,17 +12,19 @@ keyframes SR a resolución reducida (~640 p, ~45 ms/c/frame fp32 en RTX 5050)
 => el display pasa a ~10-12 fps con movimiento suave, SIN tocar la detección
 (YOLO/Mediapipe corren en el grid nativo 640; la SR/RIFE son solo display).
 
-La inferencia a resolución reducida (max 640 p) acelera RIFE 3-4× sin
+La inferencia a resolución reducida (max 640 p) acelera RIFE 2-3× sin
 perder calidad perceptible: la SR 4× domina la nitidez y RIFE solo alisa
 transiciones. Los frames interpolados se escalan de vuelta a 720p con
-bilinear.
+INTER_CUBIC (preserva bordes finos mejor que INTER_LINEAR).
 
-Detección de movimiento excesivo: el umbral de dif. absoluta media se
+Detectación de movimiento excesivo: el umbral de dif. absoluta media se
 computa a 1/4 de resolución (filtra el noise textural de Real-ESRGAN) y
-se baja a 5%. Cuando un key-frame SR difiere >5% del anterior (movimiento
+se baja a 3%. Cuando un key-frame SR difiere >3% del anterior (movimiento
 moderado-adelantado), RIFE no interpela: evita artefactos (fantasmales,
 desapariciones) que aparecen con movimientos rápidos o cambios de cámara.
-En esos casos interp retorna [] y el display vuelve al modo *hold*.
+Además se gatea por estabilidad de detecciones en server.py (salta interp
+si el número de cajas cambia o los centroides se desplazan >15%). En esos
+casos interp retorna [] y el display vuelve al modo *hold*.
 
 Requisitos de tamaño: IFNet v4.26 necesita H,W divisibles por 64.
 ``interp`` escala a max_size manteniendo aspect ratio y redondea al
@@ -33,7 +35,6 @@ from __future__ import annotations
 
 import os
 import sys
-from pathlib import Path
 
 import cv2
 import numpy as np
@@ -49,7 +50,7 @@ class RIFEInterpolator:
     """Interfaz mínima sobre el modelo RIFE HD v4.6 para interpolación de pares."""
 
     def __init__(self, weight_dir: str | None = None, device: str = "auto",
-                 motion_threshold: float = 0.05,
+                 motion_threshold: float = 0.03,
                  max_size: int = 640):
         import torch as _torch
         if device == "auto":
@@ -99,7 +100,7 @@ class RIFEInterpolator:
         Se muestrea a 1/4 de resolución (160×90) para: (1) ser 16× más rápido
         que comparar full-res, y (2) filtrar el *noise* textural que Real-ESRGAN
         introduce frame-a-frame (texturas GAN de alta frecuencia inflan la DIF
-        absoluta sin significar movimiento real). A 0.05 (5%) el umbral atrapa
+        absoluta sin significar movimiento real). A 0.03 (3%) el umbral atrapa
         movimientos moderados (brazo, cabeza) donde RIFE produce ghosting.
         """
         s = 4
@@ -162,7 +163,9 @@ class RIFEInterpolator:
                 # NCHW → HWC, GPU → CPU, tensor → numpy
                 f = f[0].permute(1, 2, 0).float().cpu().numpy()
                 f = np.clip(f * 255.0, 0, 255).astype(np.uint8)
-                # Upscale de vuelta a resolución original SR (720p)
-                f = cv2.resize(f, (w, h), interpolation=cv2.INTER_LINEAR)
+                # Upscale de vuelta a resolución SR original (720p).
+                # INTER_CUBIC (no LINEAR): preserva nitidez en bordes finos
+                # (cabello, ropa) que LINEAR borrosee al 2× upscale 640→1280p.
+                f = cv2.resize(f, (w, h), interpolation=cv2.INTER_CUBIC)
                 out.append(f)
         return out
