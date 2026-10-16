@@ -156,19 +156,23 @@ class Inferencer:
         # no bloquea y la inferencia mantiene su ritmo.
         self._async = False
         self._last_async: dict | None = None
-        # UN SOLO LOCK para _last_async y _interp_buffer. El lector async ()
-        # hace read-modify-write atómico: consume un interp frame del buffer
-        # (FIFO) y lo promueve a _last_async como fallback en la misma
-        # transacción. Con locks separados, el worker podía sobreescribir
-        # _last_async con un key-frame nuevo entre el pop() del buffer y
-        # el update() del lector → "el tiempo va para atrás" y saltos.
+        # UN SOLO LOCK para _last_async y _interp_buffer. El lector async
+        # hace read-modify-write atómico. Con locks separados, el worker podía
+        # escribir un key-frame nuevo entre el pop() del buffer y el update()
+        # del lector → "el tiempo va para atrás" y saltos no lineales.
         self._lock_async = threading.Lock()
-        # FIFO de frames interpolados de RIFE (no timestamps). El worker
-        # extiende la lista al completar RIFE; el lector async (detect() en
-        # modo live) poppea un frame por llamada → distribución natural a
-        # ~30 fps. Cuando el buffer se vacía, cae a _last_async (último
-        # frame: key o interp). Simple, robusto, sin race conditions.
+        # Buffer de timestamps para frames interpolados de RIFE: [(ts, value)].
+        # El worker los encola con timestamps futuros tras calcular RIFE; el
+        # lector async (detect()) hace PEEK (no pop) del último frame cuyo
+        # timestamp ha pasado → cada frame se muestra durante su intervalo
+        # designado, distribuyéndolos uniformemente a ~30 fps sin stutter.
         self._interp_buffer: list = []
+        # Estimación del ciclo SR (wall-clock entre key-frames) para timestamps.
+        # EMA con α=0.3: responde rápido sin jitter.
+        self._sr_cycle_ms: float = 267.0
+        self._last_sr_key_time: float = 0.0
+        # Timestamp del último key-frame SR pushado (base para los interp ts).
+        self._key_frame_time: float = 0.0
         self._model = None
         self._ready = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -231,27 +235,33 @@ class Inferencer:
                     # antes de que el worker termine: el cache se quedaba
                     # siempre vacio y la camara en vivo no devolvia NUNCA
                     # detecciones (siempre `pendiente: true`).
+                    key_time = time.perf_counter()
+                    # Medir ciclo SR (wall-clock entre key-frames) para timestamps.
+                    if self._last_sr_key_time > 0:
+                        cycle = (key_time - self._last_sr_key_time) * 1000.0
+                        self._sr_cycle_ms = (
+                            0.7 * self._sr_cycle_ms + 0.3 * cycle)
+                    self._last_sr_key_time = key_time
                     with self._lock_async:
                         self._last_async = out["value"]
-                        # Limpiar buffer de interps vencidos: el key-frame nuevo
-                        # tiene prioridad. El reader cae a _last_async (key N+1)
-                        # hasta que el worker extienda el buffer con los interps.
+                        # Limpiar interps vencidos del ciclo anterior.
+                        # El key-frame nuevo tiene prioridad: el reader cae a
+                        # _last_async (key N+1) hasta que el worker extienda el
+                        # buffer con los interps.
                         self._interp_buffer.clear()
+                        self._key_frame_time = key_time
                     # RIFE: interpolación entre key-frames SR para alisar el
-                    # display. El SR 4× (~145 ms + ~50 ms detección) da ~3.7 fps
-                    # de contenido; RIFE inserta `rife_steps` frames intermedios
-                    # (~63 ms cada uno en RTX 5050, fp32). Las cajas provienen
-                    # de la key-frame SR (detección sobre grid nativo 640); los
-                    # frames interpolados reusan esas cajas. Solo en modo async
-                    # (live).
+                    # display. El SR 4× (~145 ms + ~50 ms detección) da ~3.7 fps;
+                    # RIFE inserta `rife_steps` frames intermedios (~67 ms c/uno
+                    # en RTX 5050, fp32). Las cajas provienen de la key-frame SR
+                    # (detección sobre grid nativo 640); los frames interpolados
+                    # reusan esas cajas. Solo en modo async (live).
                     #
-                    # FIFO simple: el worker extiende el buffer tras calcular
-                    # RIFE; el lector async (detect()) poppea un frame por
-                    # llamada → distribución natural a 30 fps. Cuando el
-                    # buffer se vacía, cae a _last_async (último frame).
-                    # Se prioriza el key-frame nuevo: al recibirlo se limpia el
-                    # buffer (interps vencidos) y se promueve el key-frame como
-                    # fallback → sin saltos ni retrocesos temporales.
+                    # Timestamps PEEK: los interp se encolan con timestamps
+                    # futuros (key_time + i*interval); el reader hace peek del
+                    # último frame cuyo ts ha pasado → distribución uniforme
+                    # a ~30 fps, sin burst, sin retrocesos. El key-frame nuevo
+                    # limpia el buffer → prioridad temporal.
                     if (self._rife is not None and self._rife.ready
                             and out.get("sr") and out.get("async")):
                         annotated, result, detections, timing = out["value"]
@@ -260,11 +270,16 @@ class Inferencer:
                                 self._prev_sr_frame, annotated,
                                 num_steps=self._rife_steps)
                             if interp_imgs:
+                                n = len(interp_imgs)
+                                interval_s = (
+                                    self._sr_cycle_ms
+                                    / (n + 1) / 1000.0)
                                 with self._lock_async:
-                                    self._interp_buffer.extend(
-                                        (img, result,
-                                         detections, timing)
-                                        for img in interp_imgs)
+                                    for i, img in enumerate(interp_imgs):
+                                        ts = key_time + (i + 1) * interval_s
+                                        self._interp_buffer.append(
+                                            (ts, (img, result,
+                                                  detections, timing)))
                         self._prev_sr_frame = annotated
             except BaseException as exc:          # noqa: BLE001
                 # `finally` en vez de `except`: si `out["done"]` no fuera un
@@ -373,14 +388,21 @@ class Inferencer:
                 break
         self._q.put((image, conf, imgsz, out))
         if self._async:
-            # FIFO: popear un frame interpolado si el buffer tiene. El worker
-            # extiende el buffer tras calcular RIFE; aquí se libera un frame por
-            # llamada (naturalmente a 30 fps del browser). Un solo lock →
-            # read-modify-write atómico: el pop() y el update() de _last_async
-            # (como fallback) son una sola transacción → sin race condition.
+            # PEEK (no pop): devolver el último interp frame cuyo timestamp
+            # ha pasado. El frame se mantiene en el buffer hasta que llegue el
+            # siguiente → se muestra durante su intervalo designado, no se
+            # "agota" en un solo read. Cuando el buffer está vacío/vencido,
+            # cae a _last_async (key-frame o último interp consumido).
+            # Un solo lock → read-modify-write atómico, sin race conditions.
             with self._lock_async:
-                if self._interp_buffer:
-                    interp_val = self._interp_buffer.pop(0)
+                now = time.perf_counter()
+                interp_val = None
+                for ts, val in self._interp_buffer:
+                    if ts <= now:
+                        interp_val = val
+                    else:
+                        break
+                if interp_val is not None:
                     self._last_async = interp_val
                     return interp_val
                 return self._last_async
