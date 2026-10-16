@@ -746,7 +746,12 @@ $('#bcam').onclick = async () => {
           <div class="stat"><span>Identidades</span><b>${d.tracks||0}</b></div>` +
           riskPanels(d);
       cam.err = null;
-      if (!cam.ok) setStat();  // actualiza inmediatamente después del primer frame exitoso
+      if (!cam.ok) {
+        setStat();  // actualiza inmediatamente después del primer frame exitoso
+        // Actualizar estado de botones: el live funciona, ahora se puede detener.
+        $('#bcam').textContent = 'Desconectar webcam';
+        $('#bstop').disabled = false;
+      }
       cam.ok = true;
   } catch (e) {
       // los errores se muestran en pantalla: antes se ignoraban y la
