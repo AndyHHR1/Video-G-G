@@ -32,7 +32,8 @@
   input[type=file] { font-size:13px; }
   button { background:var(--accent); color:#fff; border:0; border-radius:7px;
            padding:8px 16px; font-size:13px; font-weight:560; cursor:pointer; }
-  button:disabled { opacity:.5; cursor:not-allowed; }
+   button:active { background:var(--accent); transform:translateY(0); }
+   button:disabled { opacity:.5; cursor:not-allowed; }
   button.ghost { background:transparent; border:1px solid var(--line); color:var(--muted); }
   .stage { background:#0a0c10; border:1px solid var(--line); border-radius:8px;
            min-height:300px; display:flex; align-items:center; justify-content:center;
@@ -513,7 +514,8 @@ function stopCam() {
   if (audioEl) { audioEl.remove(); audioEl = null; }
   document.querySelectorAll('#scam video').forEach(v => v.remove());
   cam.sent = 0; cam.err = null; cam.ok = false; cam.fps = 0; cam.t0 = 0;
-  $('#bcam').disabled = false; $('#bstop').disabled = true;
+  $('#bcam').disabled = false; $('#bcam').textContent = 'Conectar webcam';
+  $('#bstop').disabled = true;
   $('#scam').innerHTML = '<div class="placeholder">Cámara detenida</div>';
   $('#camrisk').innerHTML = ''; $('#cammeta').textContent = '';
 }
@@ -531,19 +533,19 @@ $('#bcam').onclick = async () => {
                    'origen seguro. Abre la app en <b>localhost:5000</b> ' +
                    '(no con la URL de tunneling de VS Code) o sírvela por HTTPS.');
   }
-  // RQNF13: reconexion automatica de la senal. Si la camara se cae (USB,
+  // RQNF13: reconexion automatica de la señal. Si la camara se cae (USB,
   // el navegador la libera, el equipo se suspende) se reintenta con espera
-  // creciente en lugar de quedarse muerto hasta que el usuario recargue.
-  cam.intentos = cam.intentos || 0;
+  // creciente en luego de quedarse muerto hasta que el usuario recargue.
+  $('#bcam').disabled = true; $('#bcam').textContent = 'Conectando…';
+  cam.on = true; cam.intentos = 0;
   cam.stream = await conectarCamara();
-  if (!cam.stream) return;   // conectarCamara ya muestra el motivo
-  cam.intentos = 0;
+  if (!cam.stream) { $('#bcam').disabled = false; $('#bcam').textContent = 'Conectar webcam'; cam.on = false; return; }
   cam.stream.getVideoTracks()[0]?.addEventListener('ended', () => {
-    if (cam.on) { setTimeout(() => { if (cam.on) $('\'#bcam\'').click(); }, 3000); }
+    if (cam.on) { setTimeout(() => { if (cam.on) $('#bcam').click(); }, 3000); }
   });
 
   async function conectarCamara() {
-     try {
+   try {
        return await navigator.mediaDevices.getUserMedia({
          video: { width:{ideal:1280}, height:{ideal:720} }, audio: true });
      } catch (e) {
@@ -570,8 +572,8 @@ $('#bcam').onclick = async () => {
        cam.intentos = (cam.intentos || 0) + 1;
        if (cam.intentos <= 5 && cam.on) {
          const espera = Math.min(1000 * cam.intentos, 8000);
-         $('\'#scam\'').innerHTML =
-           `<div class="placeholder">Reintentando conexión con la cámara… (${cam.intentos}/5)</div>`;
+  $('#scam').innerHTML =
+    `<div class="placeholder">Reintentando conexión con la cámara… (${cam.intentos}/5)</div>`;
          await new Promise(r => setTimeout(r, espera));
          if (cam.on) return conectarCamara();
        }
@@ -580,9 +582,8 @@ $('#bcam').onclick = async () => {
      }
   }
 
-   cam.on = true; cam.last = performance.now(); cam.sent = 0; cam.err = null;
-   cam.fps = 0; cam.t0 = 0;
-   $('#bcam').disabled = true; $('#bstop').disabled = false;
+    cam.last = performance.now(); cam.sent = 0; cam.err = null;
+    cam.fps = 0; cam.t0 = 0;
 
    // --- audio del navegador ---
    // El stream capturado incluye pista de audio del micrófono. Se reproduce
@@ -626,8 +627,8 @@ $('#bcam').onclick = async () => {
       `${cam.ok ? 'conectada' : '<b style="color:#e03c3c">sin señal</b>'} · ` +
       `cámara ${v.videoWidth}×${v.videoHeight} → envío ${small.width}×${small.height} · ` +
       `${cam.sent} frames · ${cam.fps.toFixed(1)} fps · ` +
-      `${$('#fast').checked ? 'SR en vivo (slow, ~4 fps)' : 'fluido 30 fps (sin SR)'} · ` +
-      `${rifeActive && $('#fast').checked ? 'RIFE interp ON' : 'RIFE interp OFF'}` +
+      `${$('#fast').checked ? 'SR en vivo (≈4 fps; con RIFE ~10 fps)' : 'fluido 30 fps (sin SR)'}` +
+      `${rifeActive && $('#fast').checked ? ' · RIFE interp ON' : ''}` +
       `umbral ${$('#ccam').value}` +
       (cam.err ? ` · <b style="color:#e03c3c">${cam.err}</b>` : '');
   };
@@ -673,14 +674,12 @@ $('#bcam').onclick = async () => {
   // Se vacia el hueco y se reinserta el lienzo grande MAS la previsualizacion
   // en crudo: antes el `innerHTML=''` se comia la previsualizacion y solo
   // quedaba un lienzo a tamano natural, que se veía pequeno.
-  const sc = $('#scam');
-  sc.innerHTML = '';
-  sc.style.position = 'relative';
-  sc.appendChild(disp);
-  sc.appendChild(prev);
-  $('#scam').style.position = 'relative';
-  $('#scam').appendChild(prev);
-  setStat();
+   const sc = $('#scam');
+   sc.innerHTML = '';
+   sc.style.position = 'relative';
+   sc.appendChild(disp);
+   sc.appendChild(prev);
+   setStat();
   $('#rate').onchange = setStat;
 
   // El loop se separa en dos partes:
@@ -875,6 +874,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 function camFail(msg) {
   $('#scam').innerHTML = `<div class="placeholder" style="max-width:520px">${msg}</div>`;
+  $('#bcam').disabled = false; $('#bcam').textContent = 'Conectar webcam';
 }
 window.addEventListener('beforeunload', stopCam);
 </script>
