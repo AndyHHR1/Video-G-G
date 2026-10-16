@@ -130,28 +130,15 @@ class Inferencer:
 
     def __init__(self, weights: str, device: int | str = "auto",
                  obstacle_weights: str = "yolov8s.pt", conf: float = 0.25,
-                 enable_esrgan: bool = False, enable_rife: bool = False,
-                 rife_steps: int = 2,
-                 rife_motion_threshold: float = 0.05,
-                 rife_max_size: int = 640):
+                 enable_esrgan: bool = False):
         self._weights = weights
         self._device = device
         self._obstacle_weights = obstacle_weights
         self._conf = conf
         self._enable_esrgan = enable_esrgan
-        self._enable_rife = enable_rife
-        self._rife_steps = rife_steps
-        self._rife_motion_threshold = rife_motion_threshold
-        self._rife_max_size = rife_max_size
         self._esrgan: RealESRGAN | None = None
-        self._rife: "RIFEInterpolator | None" = None
-        self._prev_sr_frame: np.ndarray | None = None
-        self._prev_dets: list | None = None  # para gate de estabilidad
         self._last_sr_flag: bool = True  # para flush de cola al toggle SR
         # Estimación del ciclo SR (wall-clock entre key-frames) para programar
-        # los interpolados de RIFE. EMA con α=0.3.
-        self._sr_cycle_ms: float = 267.0
-        self._last_sr_key_time: float = 0.0
         self._q: queue.Queue = queue.Queue()
         # Modo asincrono para la camara en vivo: el navegador entrega el frame
         # y recibe ENSEGUIDA el ultimo resultado calculado, sin esperar a la
@@ -162,23 +149,8 @@ class Inferencer:
         # no bloquea y la inferencia mantiene su ritmo.
         self._async = False
         self._last_async: dict | None = None
-        # UN SOLO LOCK para _last_async y _interp_buffer. El lector async
-        # hace read-modify-write atómico. Con locks separados, el worker podía
-        # escribir un key-frame nuevo entre el pop() del buffer y el update()
-        # del lector → "el tiempo va para atrás" y saltos no lineales.
+        # Lock único para el acceso al último resultado asíncrono.
         self._lock_async = threading.Lock()
-        # Buffer de timestamps para frames interpolados de RIFE: [(ts, value)].
-        # El worker los encola con timestamps futuros tras calcular RIFE; el
-        # lector async (detect()) hace PEEK (no pop) del último frame cuyo
-        # timestamp ha pasado → cada frame se muestra durante su intervalo
-        # designado, distribuyéndolos uniformemente a ~30 fps sin stutter.
-        self._interp_buffer: list = []
-        # Estimación del ciclo SR (wall-clock entre key-frames) para timestamps.
-        # EMA con α=0.3: responde rápido sin jitter.
-        self._sr_cycle_ms: float = 267.0
-        self._last_sr_key_time: float = 0.0
-        # Timestamp del último key-frame SR pushado (base para los interp ts).
-        self._key_frame_time: float = 0.0
         self._model = None
         self._ready = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -210,17 +182,6 @@ class Inferencer:
         # quede ligado a este mismo hilo (igual que YOLO).
         if self._enable_esrgan:
             self._esrgan = RealESRGAN(device=self._device)
-        # RIFE: interpolación de frames entre key-frames SR. Se carga DENTRO
-        # del hilo trabajador para que el contexto CUDA quede ligado (igual que
-        # ESGRAN/YOLO). Si falla, ready=False y el live SR mantiene el hold.
-        if self._enable_rife:
-            from rife_interp import RIFEInterpolator
-            # motion_threshold: 5% (ajustable). max_size: RIFE inferencia a
-            # 640px (no full-res SR), ~3× más rápido sin perder fluidez visible.
-            self._rife = RIFEInterpolator(
-                device=self._device,
-                motion_threshold=self._rife_motion_threshold,
-                max_size=self._rife_max_size)
         self._ready.set()
         while True:
             job = self._q.get()
@@ -246,96 +207,8 @@ class Inferencer:
                     # antes de que el worker termine: el cache se quedaba
                     # siempre vacio y la camara en vivo no devolvia NUNCA
                     # detecciones (siempre `pendiente: true`).
-                    key_time = time.perf_counter()
-                    # Sólo track del ciclo SR cuando el job usa SR: en modo
-                    # normal (~40 ms/cycle) ensucia el EMA y, al volver a SR,
-                    # los interp se timestampean a 13 ms (muy adelantados) →
-                    # frames vencidos que "salta" el browser leyendo buffer viejo.
-                    if out.get("sr"):
-                        if self._last_sr_key_time > 0:
-                            cycle = (key_time - self._last_sr_key_time) * 1000.0
-                            self._sr_cycle_ms = (
-                                0.7 * self._sr_cycle_ms + 0.3 * cycle)
-                        self._last_sr_key_time = key_time
-                    else:
-                        # Reset RIFE state al salir del modo SR: evita que
-                        # _prev_sr_frame (de una sesión SR anterior) se interpele
-                        # con el primer key-frame SR nuevo → ghosts/deformaciones.
-                        self._prev_sr_frame = None
-                        self._prev_dets = None
                     with self._lock_async:
                         self._last_async = out["value"]
-                        # Limpiar interps vencidos del ciclo anterior.
-                        # El key-frame nuevo tiene prioridad: el reader cae a
-                        # _last_async (key N+1) hasta que el worker extienda el
-                        # buffer con los interps.
-                        self._interp_buffer.clear()
-                        self._key_frame_time = key_time
-                    # RIFE: interpolación entre key-frames SR para alisar el
-                    # display. El SR 4× (~145 ms + ~50 ms detección) da ~3.7 fps
-                    # en RTX 5050; RIFE en resolución reducida (~640 p, ~50 ms
-                    # por interp) eleva a ~10-12 fps. Las cajas provienen de la
-                    # key-frame SR (detección sobre grid nativo 640); los frames
-                    # interpolados reusan esas cajas. Solo en modo async (live).
-                    #
-                    # Timestamps PEEK: los interp se encolan con timestamps
-                    # futuros (key_time + i*interval); el reader hace peek del
-                    # último frame cuyo ts ha pasado → distribución uniforme
-                    # a ~30 fps, sin burst, sin retrocesos. El key-frame nuevo
-                    # limpia el buffer → prioridad temporal.
-                    if (self._rife is not None and self._rife.ready
-                            and out.get("sr") and out.get("async")):
-                        annotated, result, detections, timing = out["value"]
-                        # Gate de estabilidad de detecciones: RIFE warpea entre
-                        # dos key-frames SR; si una persona entra/sale o cambia
-                        # de posición drásticamente, el flow estimation de RIFE
-                        # produce artefactos (persona fantasma/parcialmente
-                        # desaparecida). Se salta la interp cuando:
-                        #   1) el número de detecciones cambió en >1, o
-                        #   2) la posición del centroide colectivo cambió >15%.
-                        prev_dets = getattr(self, "_prev_dets", None)
-                        skip_rife = False
-                        if prev_dets is not None:
-                            if len(dets) != len(prev_dets) and \
-                               abs(len(dets) - len(prev_dets)) > 1:
-                                skip_rife = True
-                            elif dets and prev_dets:
-                                # Comparar centroides de cajas NORMALIZADAS a 0..1.
-                                # bbox viene en píxeles absolutos del frame SR; hay
-                                # que normalizar para comparar consistentemente
-                                # (1280×720 vs 5120×2880, según fast_mode).
-                                ah, aw = annotated.shape[:2]
-                                prev_h = self._prev_sr_frame.shape[0] \
-                                    if self._prev_sr_frame is not None else ah
-                                prev_w = self._prev_sr_frame.shape[1] \
-                                    if self._prev_sr_frame is not None else aw
-                                c0 = np.mean(
-                                    [np.array([b["bbox"][0]/prev_w, b["bbox"][1]/prev_h])
-                                     for b in prev_dets if "bbox" in b] or [np.array([0,0])],
-                                    axis=0)
-                                c1 = np.mean(
-                                    [np.array([b["bbox"][0]/aw, b["bbox"][1]/ah])
-                                     for b in dets if "bbox" in b] or [np.array([0,0])],
-                                    axis=0)
-                                if np.linalg.norm(c1 - c0) > 0.15:
-                                    skip_rife = True
-                        if not skip_rife and self._prev_sr_frame is not None:
-                            interp_imgs = self._rife.interp(
-                                self._prev_sr_frame, annotated,
-                                num_steps=self._rife_steps)
-                            if interp_imgs:
-                                n = len(interp_imgs)
-                                interval_s = (
-                                    self._sr_cycle_ms
-                                    / (n + 1) / 1000.0)
-                                with self._lock_async:
-                                    for i, img in enumerate(interp_imgs):
-                                        ts = key_time + (i + 1) * interval_s
-                                        self._interp_buffer.append(
-                                            (ts, (img, result,
-                                                  detections, timing)))
-                        self._prev_sr_frame = annotated
-                        self._prev_dets = dets
             except BaseException as exc:          # noqa: BLE001
                 # `finally` en vez de `except`: si `out["done"]` no fuera un
                 # Event, el `.set()` lanzaba AttributeError y el hilo
@@ -455,23 +328,10 @@ class Inferencer:
                     break
         self._q.put((image, conf, imgsz, out))
         if self._async:
-            # PEEK (no pop): devolver el último interp frame cuyo timestamp
-            # ha pasado. El frame se mantiene en el buffer hasta que llegue el
-            # siguiente → se muestra durante su intervalo designado, no se
-            # "agota" en un solo read. Cuando el buffer está vacío/vencido,
-            # cae a _last_async (key-frame o último interp consumido).
-            # Un solo lock → read-modify-write atómico, sin race conditions.
+            # Devolver el último resultado ya calculado sin bloquear: el worker
+            # sigue procesando el frame siguiente y el navegador siempre ve el
+            # más reciente disponible. Un lock → read-modify-write atómico.
             with self._lock_async:
-                now = time.perf_counter()
-                interp_val = None
-                for ts, val in self._interp_buffer:
-                    if ts <= now:
-                        interp_val = val
-                    else:
-                        break
-                if interp_val is not None:
-                    self._last_async = interp_val
-                    return interp_val
                 return self._last_async
         out["done"].wait()
         if "error" in out:
@@ -1247,11 +1107,6 @@ def health():
             else "desactivado (--esrgan)" if getattr(_inferencer, "_enable_esrgan", False)
             else "desactivado"
         ),
-        "rife": (
-            "activo" if getattr(_inferencer, "_rife", None) and _inferencer._rife.ready
-            else "desactivado (fallo carga)" if getattr(_inferencer, "_enable_rife", False)
-            else "desactivado (--rife)"
-        ),
     })
 
 
@@ -1279,22 +1134,6 @@ def main() -> None:
     ap.add_argument("--esrgan", action="store_true",
                     help="Super-resolución Real-ESRGAN 4× antes de la detección "
                          "(~+120 ms/frame en RTX 5050).")
-    ap.add_argument("--rife", action="store_true",
-                    help="Interpolación RIFE entre key-frames SR en vivo: eleva "
-                         "el display de ~3.7 fps a ~10-12 fps (2 steps a 640px, "
-                         "~50 ms/interp en RTX 5050). Requiere --esrgan y GPU CUDA. "
-                         "Las cajas provienen de la key-frame SR; los frames interpolados "
-                         "son display-only. Umbral de movimiento 3% (ajustable).")
-    ap.add_argument("--rife-steps", type=int, default=2, choices=[1, 2, 3],
-                    help="Frames intermedios RIFE entre cada key-frame SR (default 2). "
-                         "Más steps = más fps pero mais carga GPU.")
-    ap.add_argument("--rife-motion-threshold", type=float, default=0.03,
-                    help="Umbral de dif. absoluta (0-1) entre key-frames SR. "
-                         "RIFE salta la interp. encima de este umbral (default 0.03=3%). "
-                         "Subir para más interp (más artefactos); bajar para menos (más hold).")
-    ap.add_argument("--rife-max-size", type=int, default=640,
-                    help="Resolución máxima para inferencia RIFE (default 640). "
-                         "Mayor = mejor calidad, más lento. 640 px es ~3× más rápido que full-res.")
     args = ap.parse_args()
 
     weights = Path(args.weights)
@@ -1328,10 +1167,6 @@ def main() -> None:
         obstacle_weights=args.obstacle_weights,
         device=args.device,
         enable_esrgan=args.esrgan,
-        enable_rife=args.rife and args.esrgan,
-        rife_steps=args.rife_steps,
-        rife_motion_threshold=args.rife_motion_threshold,
-        rife_max_size=args.rife_max_size,
     )
     print("  modelo listo")
     # Precalentar la inferencia fría: la primera llamada a RiskEngine inicializa
@@ -1347,7 +1182,6 @@ def main() -> None:
     # una SR de arranque (1280). Con SR OFF el live usa el nativo (480/640).
     with _inferencer._lock_async:
         _inferencer._last_async = None
-        _inferencer._interp_buffer.clear()
     app.run(host=args.host, port=args.port, debug=args.debug, threaded=True)
 
 
