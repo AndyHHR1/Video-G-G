@@ -749,7 +749,7 @@ $('#bcam').onclick = async () => {
       if (!cam.ok) {
         setStat();  // actualiza inmediatamente después del primer frame exitoso
         // Actualizar estado de botones: el live funciona, ahora se puede detener.
-        $('#bcam').textContent = 'Desconectar webcam';
+        $('#bcam').textContent = 'Conectado';
         $('#bstop').disabled = false;
       }
       cam.ok = true;
