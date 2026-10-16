@@ -176,12 +176,22 @@ class Inferencer:
             self._weights, obstacle_weights=self._obstacle_weights,
             device=self._device, conf=self._conf, enable_pose=True,
             anonymize=True,
+            pose_every=8, people_every=6,
+            stairs_every=13, obstacle_every=11, classify_every=6,
         )
         # Real-ESRGAN: super-resolución 4× (solo si --esrgan).  Se carga
         # DENTRO del hilo trabajador para que el contexto CUDA se cree y
         # quede ligado a este mismo hilo (igual que YOLO).
         if self._enable_esrgan:
             self._esrgan = RealESRGAN(device=self._device)
+        try:
+            import numpy as _np
+            _wu = _np.zeros((480, 640, 3), _np.uint8)
+            self._engine.step(_wu, force=True, allow_alerts=False)
+            self._engine.step(_wu, force=True, allow_alerts=False)
+            self._engine.step(_wu, force=False, allow_alerts=False)
+        except Exception as _e:
+            print(f"  [aviso] warmup del motor fallo: {_e}", flush=True)
         self._ready.set()
         while True:
             job = self._q.get()
