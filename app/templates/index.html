@@ -288,7 +288,7 @@ document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
 let rifeActive = false;
 fetch('/api/health').then(r=>r.json()).then(d => {
   $('#dev').textContent = `dispositivo: ${d.device} · pesos: ${d.weights.split('/').slice(-2).join('/')}`;
-  rifeActive = d.rife === 'activo';
+   rifeActive = d.rife === 'activo';
 });
 
 // Un 500 de Flask devuelve una pagina HTML. Intentar parsearla como JSON da
@@ -625,7 +625,7 @@ $('#bcam').onclick = async () => {
       `cámara ${v.videoWidth}×${v.videoHeight} → envío ${small.width}×${small.height} · ` +
       `${cam.sent} frames · ${cam.fps.toFixed(1)} fps · ` +
       `${$('#fast').checked ? 'SR en vivo (slow, ~4 fps)' : 'fluido 30 fps (sin SR)'} · ` +
-      `${rifeActive ? 'RIFE interp ON' : ''}`
+      `${rifeActive ? 'RIFE interp ON' : 'RIFE interp OFF'}` +
       `umbral ${$('#ccam').value}` +
       (cam.err ? ` · <b style="color:#e03c3c">${cam.err}</b>` : '');
   };
