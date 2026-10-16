@@ -142,8 +142,8 @@ class Inferencer:
         self._esrgan: RealESRGAN | None = None
         self._rife: "RIFEInterpolator | None" = None
         self._prev_sr_frame: np.ndarray | None = None
-        # Estimación del ciclo SR para programar interpolados de RIFE.
-        # Ventana móvil de 5 muestras (EMA) de wall-clock entre key-frames SR.
+        # Estimación del ciclo SR (wall-clock entre key-frames) para programar
+        # los interpolados de RIFE. EMA con α=0.3.
         self._sr_cycle_ms: float = 267.0
         self._last_sr_key_time: float = 0.0
         self._q: queue.Queue = queue.Queue()
@@ -157,6 +157,11 @@ class Inferencer:
         self._async = False
         self._last_async: dict | None = None
         self._lock_async = threading.Lock()
+        # Timestamped buffer for time-scheduled RIFE frames. Cada entrada:
+        # (timestamp_abs, value). El lector async (detect() en modo live)
+        # consume los frames cuyo timestamp ha pasado → display fluido.
+        self._interp_buffer: list = []
+        self._interp_lock = threading.Lock()
         self._model = None
         self._ready = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -222,8 +227,7 @@ class Inferencer:
                     with self._lock_async:
                         self._last_async = out["value"]
                     # Medir ciclo SR (wall-clock entre key-frames) para programar
-                    # los interpolados de RIFE. EMA con α=0.3: responde rápido a
-                    # cambios de carga sin jitter.
+                    # los interpolados de RIFE. EMA con α=0.3.
                     now = time.perf_counter()
                     if self._last_sr_key_time > 0:
                         cycle = (now - self._last_sr_key_time) * 1000.0
@@ -237,10 +241,12 @@ class Inferencer:
                     # key-frame SR (detección sobre grid nativo 640); los frames
                     # interpolados reusan esas cajas. Solo en modo async (live).
                     #
-                    # Los frames interpolados se envían con retardo programado
-                    # (no en burst) para que el lector async los vea espaciados
-                    # uniformemente: sin esto el display solo ve el último frame
-                    # del burst (~3.7 fps, el mismo que sin RIFE).
+                    # Los frames interpolados se encolan con timestamps futuros
+                    # (no en burst): el lector async (detect()) consume los cuáles
+                    # han pasado su timestamp, distribuyéndolos uniformemente en
+                    # el ciclo SR → display fluido. Si el próximo key-frame SR
+                    # llega antes de que se consuman todos, el buffer se purga y
+                    # el último key-frame tiene prioridad (no hay stutter).
                     if (self._rife is not None and self._rife.ready
                             and out.get("sr") and out.get("async")):
                         annotated, result, detections, timing = out["value"]
@@ -249,25 +255,18 @@ class Inferencer:
                                 self._prev_sr_frame, annotated,
                                 num_steps=self._rife_steps)
                             if interp_imgs:
-                                # Intervalo objetivo: distribuir los frames
-                                # interpolados en el ciclo SR. Se usa un hilo
-                                # daemon: el worker no se bloquea y puede recoger
-                                # el siguiente frame de la cámara inmediatamente.
+                                n = len(interp_imgs)
                                 sr_cycle_ms = max(
-                                    33 * (len(interp_imgs) + 1),
-                                    self._sr_cycle_ms)
-                                interval_ms = (
-                                    sr_cycle_ms / (len(interp_imgs) + 1))
-                                def _push_interp(_imgs=interp_imgs):
-                                    for _img in _imgs:
-                                        time.sleep(interval_ms / 1000.0)
-                                        with self._lock_async:
-                                            self._last_async = (
-                                                _img, result, detections,
-                                                timing)
-                                _t = threading.Thread(
-                                    target=_push_interp, daemon=True)
-                                _t.start()
+                                    33 * (n + 1), self._sr_cycle_ms)
+                                interval_ms = sr_cycle_ms / (n + 1)
+                                base = now  # timestamp del key-frame SR
+                                with self._interp_lock:
+                                    self._interp_buffer.clear()
+                                    for i, img in enumerate(interp_imgs):
+                                        ts = base + (i + 1) * interval_ms / 1000.0
+                                        self._interp_buffer.append(
+                                            (ts, (img, result,
+                                                  detections, timing)))
                         self._prev_sr_frame = annotated
             except BaseException as exc:          # noqa: BLE001
                 # `finally` en vez de `except`: si `out["done"]` no fuera un
@@ -376,6 +375,20 @@ class Inferencer:
                 break
         self._q.put((image, conf, imgsz, out))
         if self._async:
+            now = time.perf_counter()
+            # Consumir frames interpolados de RIFE cuyo timestamp haya pasado.
+            # Esto distribuye los frames a 30 fps reales en el display, sin
+            # bloquear el worker: los interp se calculan async y se empujan al
+            # buffer con timestamps futuros; aquí se libera cada uno en su
+            # momento justo. Se descartan los frames vencidos (solo se
+            # devuelve el más reciente que haya pasado su timestamp).
+            interp_val = None
+            with self._interp_lock:
+                while (self._interp_buffer
+                        and self._interp_buffer[0][0] <= now):
+                    _, interp_val = self._interp_buffer.pop(0)
+            if interp_val is not None:
+                return interp_val
             with self._lock_async:
                 return self._last_async
         out["done"].wait()
@@ -1242,6 +1255,8 @@ def main() -> None:
     # una SR de arranque (1280). Con SR OFF el live usa el nativo (480/640).
     with _inferencer._lock_async:
         _inferencer._last_async = None
+    with _inferencer._interp_lock:
+        _inferencer._interp_buffer.clear()
     app.run(host=args.host, port=args.port, debug=args.debug, threaded=True)
 
 
