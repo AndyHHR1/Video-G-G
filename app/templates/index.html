@@ -709,7 +709,10 @@ $('#bcam').onclick = async () => {
         small.width = w; small.height = h;
         sctx.drawImage(cv, 0, 0, w, h);
       } else { small.width = w; small.height = h; sctx.drawImage(cv, 0, 0); }
-      const blob = await new Promise(r => small.toBlob(r, 'image/jpeg', 0.8));
+      const blob = await new Promise(r => {
+        const t = setTimeout(() => r(null), 500);  // safety: 500ms timeout
+        small.toBlob(r => { clearTimeout(t); r(r); }, 'image/jpeg', 0.8);
+      });
       if (!blob) throw new Error('el canvas no se pudo convertir en imagen');
       // Cuerpo binario crudo: evita el parser multipart de Werkzeug, que
       // con un JPEG de ~50 KB costaba ~17 ms por fotograma. A 960 px el
@@ -742,23 +745,27 @@ $('#bcam').onclick = async () => {
           <div class="stat"><span>Identidades</span><b>${d.tracks||0}</b></div>` +
           riskPanels(d);
       cam.err = null; cam.ok = true;
-    } catch (e) {
+  } catch (e) {
       // los errores se muestran en pantalla: antes se ignoraban y la
       // imagen se quedaba en negro sin explicar nada
       cam.err = e.message || String(e);
+    } finally {
+      // cam.busy SIEMPRE se libera, incluso si setStat() o el cálculo de
+      // fps fallan (causaba el dropeo brusaco a 5 fps: un error en el
+      // finally del try/catch dejaba cam.busy=true para siempre).
+      cam.last = performance.now();
+      cam.sent++;
+      // fps medidos sobre frames realmente completados, no sobre el
+      // intervalo de envio: así se ve el rendimiento real
+      if (!cam.t0) cam.t0 = cam.last;
+      if (cam.last - cam.t0 > 500) {
+        cam.fps = cam.sent / ((cam.last - cam.t0) / 1000);
+        cam.sent = 0; cam.t0 = cam.last;
+        setStat();
+      } else if (cam.err) setStat();
+      cam.busy = false;
     }
-    cam.last = performance.now();
-    cam.sent++;
-    // fps medidos sobre frames realmente completados, no sobre el
-    // intervalo de envio: asi se ve el rendimiento real
-    if (!cam.t0) cam.t0 = cam.last;
-    if (cam.last - cam.t0 > 500) {
-      cam.fps = cam.sent / ((cam.last - cam.t0) / 1000);
-      cam.sent = 0; cam.t0 = cam.last;
-      setStat();
-    } else if (cam.err) setStat();
-    cam.busy = false;
-  }
+  };
 
   // ScheduleFrame programa el próximo setTimeout de inmediato (sin await),
   // respetando `gap` como intervalo real. sendFrame corre en paralelo.
