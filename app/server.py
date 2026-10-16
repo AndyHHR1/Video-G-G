@@ -211,7 +211,8 @@ class Inferencer:
                         allow_alerts=out.get("allow_alerts", True),
                         fast=out.get("fast", False),
                         sr=out.get("sr", True),
-                        for_upload=out.get("for_upload", False))
+                        for_upload=out.get("for_upload", False),
+                        fid=out.get("fid"))
                     # El ultimo resultado se guarda SIEMPRE, no solo en modo
                     # asincrono. Antes se guardaba bajo `if self._async`, pero
                     # la peticion restaura `_async = False` en su `finally`
@@ -237,7 +238,8 @@ class Inferencer:
                 out["done"].set()
 
     def _job(self, image, conf, imgsz, draw=True, force=False,
-             allow_alerts=True, fast=False, sr=True, for_upload=False):
+             allow_alerts=True, fast=False, sr=True, for_upload=False,
+             fid: int | None = None):
         """Motor completo + dibujo, ambos dentro del hilo trabajador.
 
         El dibujo tambien se hace aqui a proposito: medir en esta maquina
@@ -258,6 +260,7 @@ class Inferencer:
             image = self._esrgan.enhance(image, fast=fast, for_upload=for_upload)
         result = self._engine.step(image, force=force,
                                    allow_alerts=allow_alerts)
+        result["frame_id"] = fid
         t_predict = (time.perf_counter() - t0) * 1000
 
         # En el modo `overlay=0` (camara en vivo) el navegador dibuja las cajas
@@ -301,7 +304,7 @@ class Inferencer:
 
     def detect(self, image: np.ndarray, conf: float, imgsz: int, draw: bool = True,
                force: bool = False, allow_alerts: bool = True, fast: bool = False,
-               sr: bool = True, for_upload: bool = False):
+               sr: bool = True, for_upload: bool = False, fid: int | None = None):
         """Encola el trabajo y espera el resultado.
 
         En modo asincrono devuelve de inmediato el ultimo resultado disponible
@@ -316,7 +319,8 @@ class Inferencer:
         """
         out = {"done": threading.Event(), "no_draw": not draw, "force": force,
                "allow_alerts": allow_alerts, "fast": fast, "sr": sr,
-               "for_upload": for_upload, "async": self._async}
+               "for_upload": for_upload, "async": self._async,
+               "fid": fid}
         # "Solo el ultimo frame importa": si el motor no llega al ritmo de la
         # webcam, la cola crece y el resultado llega cada vez mas rancio. Se
         # descartan los frames en espera cuando se acumulan.
@@ -475,7 +479,8 @@ def respuesta(dets, result, timing, **extra) -> "Response":
         "alertas": result["alertas"],
         "tracks": result["tracks"],
         "sistema": result["sistema"],
-        "timing": timing,
+        "timing": {**timing, "stages": result.get("stages", {})},
+        "frame_id": result.get("frame_id"),
     }
     cuerpo.update(extra)
     return jsonify(cuerpo)
@@ -599,14 +604,20 @@ def api_frame():
     # SR on-demand en vivo: OFF por defecto (4× calidad ~0.8-1.2 s/frame rompe
     # 30 fps). ?sr=1 lo fuerza; /api/detect mantiene SR siempre.
     live_sr = overlay or request.args.get("sr", "0") == "1"
+    # `fid` opcional del cliente: server lo devuelve como `frame_id` en la
+    # respuesta, con el id del frame que el motor analizó REALMENTE. Así el
+    # cliente dibuja las cajas sobre el frame emparejado (no sobre el vivo),
+    # eliminando el "desfase" de cajas sobre una escena distinta.
+    fid = request.args.get("fid")
     try:
         got = _inferencer.detect(image, conf, imgsz, draw=overlay, fast=False,
-                                 sr=live_sr)
+                                 sr=live_sr, fid=fid)
     finally:
         _inferencer.set_async(False)
     if got is None:
         return jsonify({"detections": [], "summary": summarise([]),
                         "riesgo": "BAJO", "timing": {"predict": 0, "draw": 0},
+                        "frame_id": None,
                         "pendiente": True})
     annotated, result, dets, timing = got
     if overlay:
@@ -652,10 +663,11 @@ def api_frame():
         "obstaculos": result["obstaculos"],
         "alertas": result["alertas"],
         "tracks": result["tracks"],
-        "sistema": result["sistema"],
-        "timing": timing,
+        "timing": {**timing, "stages": result.get("stages", {})},
+        "frame_id": result.get("frame_id"),
         "size": [w, h],
     }
+
     # SR on-demand: enviar el frame super-resuelto porque es diferente al nativo.
     if live_sr:
         cuerpo["image"] = encode_b64(annotated, quality=72)
