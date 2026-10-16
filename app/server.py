@@ -256,6 +256,12 @@ class Inferencer:
                             self._sr_cycle_ms = (
                                 0.7 * self._sr_cycle_ms + 0.3 * cycle)
                         self._last_sr_key_time = key_time
+                    else:
+                        # Reset RIFE state al salir del modo SR: evita que
+                        # _prev_sr_frame (de una sesión SR anterior) se interpele
+                        # con el primer key-frame SR nuevo → ghosts/deformaciones.
+                        self._prev_sr_frame = None
+                        self._prev_dets = None
                     with self._lock_async:
                         self._last_async = out["value"]
                         # Limpiar interps vencidos del ciclo anterior.
@@ -293,15 +299,23 @@ class Inferencer:
                                abs(len(dets) - len(prev_dets)) > 1:
                                 skip_rife = True
                             elif dets and prev_dets:
-                                # Comparar centroides de cajas
-                                c0 = np.mean([b["bbox"][:2] for b in prev_dets
-                                              if "bbox" in b], axis=0) \
-                                    if any("bbox" in d for d in prev_dets) \
-                                    else np.array([0, 0])
-                                c1 = np.mean([b["bbox"][:2] for b in dets
-                                              if "bbox" in b], axis=0) \
-                                    if any("bbox" in d for d in dets) \
-                                    else np.array([0, 0])
+                                # Comparar centroides de cajas NORMALIZADAS a 0..1.
+                                # bbox viene en píxeles absolutos del frame SR; hay
+                                # que normalizar para comparar consistentemente
+                                # (1280×720 vs 5120×2880, según fast_mode).
+                                ah, aw = annotated.shape[:2]
+                                prev_h = self._prev_sr_frame.shape[0] \
+                                    if self._prev_sr_frame is not None else ah
+                                prev_w = self._prev_sr_frame.shape[1] \
+                                    if self._prev_sr_frame is not None else aw
+                                c0 = np.mean(
+                                    [np.array([b["bbox"][0]/prev_w, b["bbox"][1]/prev_h])
+                                     for b in prev_dets if "bbox" in b] or [np.array([0,0])],
+                                    axis=0)
+                                c1 = np.mean(
+                                    [np.array([b["bbox"][0]/aw, b["bbox"][1]/ah])
+                                     for b in dets if "bbox" in b] or [np.array([0,0])],
+                                    axis=0)
                                 if np.linalg.norm(c1 - c0) > 0.15:
                                     skip_rife = True
                         if not skip_rife and self._prev_sr_frame is not None:
