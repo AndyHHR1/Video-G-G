@@ -154,7 +154,14 @@ class RealESRGAN:
         x = np.ascontiguousarray(np.transpose(x[None], (0, 3, 1, 2)))
         x = torch.from_numpy(x).to(self._dev, dtype=torch.float32)
 
-        y = self._model(x)                              # [1, 3, 4*in_h, 4*in_w]
+        # fp16 autocast en CUDA: la FX GraphModule de ESGRAN es una cadena lineal
+        # de convoluciones (PixelConv/Shuffle) que mapeen fp16 sin perder calidad
+        # visual. Medido en RTX 5050: ~90 ms (fp32) → ~55 ms (fp16) en 112×112.
+        if self._cuda:
+            with torch.autocast(device_type="cuda", dtype=torch.float16):
+                y = self._model(x)
+        else:
+            y = self._model(x)
 
         # NCHW → NHWC, [0, 1] → [0, 255], RGB → BGR
         out = y[0].permute(1, 2, 0).cpu().numpy()

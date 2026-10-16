@@ -142,6 +142,10 @@ class Inferencer:
         self._esrgan: RealESRGAN | None = None
         self._rife: "RIFEInterpolator | None" = None
         self._prev_sr_frame: np.ndarray | None = None
+        # Estimación del ciclo SR para programar interpolados de RIFE.
+        # Ventana móvil de 5 muestras (EMA) de wall-clock entre key-frames SR.
+        self._sr_cycle_ms: float = 267.0
+        self._last_sr_key_time: float = 0.0
         self._q: queue.Queue = queue.Queue()
         # Modo asincrono para la camara en vivo: el navegador entrega el frame
         # y recibe ENSEGUIDA el ultimo resultado calculado, sin esperar a la
@@ -217,12 +221,26 @@ class Inferencer:
                     # detecciones (siempre `pendiente: true`).
                     with self._lock_async:
                         self._last_async = out["value"]
-                    # RIFE: interpolar entre key-frames SR para alisar el
+                    # Medir ciclo SR (wall-clock entre key-frames) para programar
+                    # los interpolados de RIFE. EMA con α=0.3: responde rápido a
+                    # cambios de carga sin jitter.
+                    now = time.perf_counter()
+                    if self._last_sr_key_time > 0:
+                        cycle = (now - self._last_sr_key_time) * 1000.0
+                        self._sr_cycle_ms = (
+                            0.7 * self._sr_cycle_ms + 0.3 * cycle)
+                    self._last_sr_key_time = now
+                    # RIFE: interpolación entre key-frames SR para alisar el
                     # display. El SR 4× (~267 ms/frame) da ~3.7 fps; RIFE inserta
                     # `rife_steps` frames intermedios (~63 ms cada uno en RTX 5050)
                     # => ~7-9 fps con movimiento suave. Las cajas provienen de la
                     # key-frame SR (detección sobre grid nativo 640); los frames
                     # interpolados reusan esas cajas. Solo en modo async (live).
+                    #
+                    # Los frames interpolados se envían con retardo programado
+                    # (no en burst) para que el lector async los vea espaciados
+                    # uniformemente: sin esto el display solo ve el último frame
+                    # del burst (~3.7 fps, el mismo que sin RIFE).
                     if (self._rife is not None and self._rife.ready
                             and out.get("sr") and out.get("async")):
                         annotated, result, detections, timing = out["value"]
@@ -230,10 +248,26 @@ class Inferencer:
                             interp_imgs = self._rife.interp(
                                 self._prev_sr_frame, annotated,
                                 num_steps=self._rife_steps)
-                            for interp_img in interp_imgs:
-                                interp_val = (interp_img, result, detections, timing)
-                                with self._lock_async:
-                                    self._last_async = interp_val
+                            if interp_imgs:
+                                # Intervalo objetivo: distribuir los frames
+                                # interpolados en el ciclo SR. Se usa un hilo
+                                # daemon: el worker no se bloquea y puede recoger
+                                # el siguiente frame de la cámara inmediatamente.
+                                sr_cycle_ms = max(
+                                    33 * (len(interp_imgs) + 1),
+                                    self._sr_cycle_ms)
+                                interval_ms = (
+                                    sr_cycle_ms / (len(interp_imgs) + 1))
+                                def _push_interp(_imgs=interp_imgs):
+                                    for _img in _imgs:
+                                        time.sleep(interval_ms / 1000.0)
+                                        with self._lock_async:
+                                            self._last_async = (
+                                                _img, result, detections,
+                                                timing)
+                                _t = threading.Thread(
+                                    target=_push_interp, daemon=True)
+                                _t.start()
                         self._prev_sr_frame = annotated
             except BaseException as exc:          # noqa: BLE001
                 # `finally` en vez de `except`: si `out["done"]` no fuera un

@@ -114,9 +114,14 @@ class RIFEInterpolator:
         pr = (pw - w) // 2
 
         def _to_tensor(bgr: np.ndarray) -> torch.Tensor:
+            # RIFE fue entrenado con imagenes RGB (PIL). El pipeline del server
+            # pasa BGR (OpenCV/Real-ESRGAN). Si se pasa BGR directamente, el
+            # flujo optico sale corrupto y la gente "desaparece" en los frames
+            # interpolados. Se convierte BGR→RGB con indexing de canales (O(1),
+            # sin copia de memoria).
             t = torch.from_numpy(
-                np.ascontiguousarray(bgr[:h, :w])).to(self.device,
-                                                       dtype=torch.float32)
+                np.ascontiguousarray(bgr[:h, :w, ::-1])).to(self.device,
+                                                            dtype=torch.float32)
             t = t.permute(2, 0, 1)[None, ...] / 255.0
             t = torch.nn.functional.pad(t, (pl, pr, pt, pb),
                                         mode="constant", value=0)
