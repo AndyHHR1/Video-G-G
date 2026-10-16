@@ -513,7 +513,8 @@ function stopCam() {
   if (cam.video) { cam.video.remove(); cam.video = null; }
   if (audioEl) { audioEl.remove(); audioEl = null; }
   document.querySelectorAll('#scam video').forEach(v => v.remove());
-  cam.sent = 0; cam.err = null; cam.ok = false; cam.fps = 0; cam.t0 = 0;
+   cam.sent = 0; cam.err = null; cam.ok = false; cam.fps = 0; cam.t0 = 0;
+   cam.busy = false;  // por si un sendFrame pendiente quedó cam.ok stuck
   $('#bcam').disabled = false; $('#bcam').textContent = 'Conectar webcam';
   $('#bstop').disabled = true;
   $('#scam').innerHTML = '<div class="placeholder">Cámara detenida</div>';
@@ -748,13 +749,10 @@ $('#bcam').onclick = async () => {
       cam.err = null;
       if (!cam.ok && cam.on) {
         setStat();
-        // Actualizar estado de botones: el live funciona, ahora se puede detener.
-        // El check de cam.on evita race con stopCam: si stopCam corre mientras
-        // sendFrame aún procesa, no sobre-escribe el reseteo del botón.
         $('#bcam').textContent = 'Conectado';
         $('#bstop').disabled = false;
+        cam.ok = true;  // solo si la cámara sigue activa (evita race con stopCam)
       }
-      cam.ok = true;
   } catch (e) {
       // los errores se muestran en pantalla: antes se ignoraban y la
       // imagen se quedaba en negro sin explicar nada
