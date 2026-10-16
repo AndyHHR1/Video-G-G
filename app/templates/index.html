@@ -290,6 +290,8 @@ fetch('/api/health').then(r=>r.json()).then(d => {
   $('#dev').textContent = `dispositivo: ${d.device} · pesos: ${d.weights.split('/').slice(-2).join('/')}`;
    rifeActive = d.rife === 'activo';
 });
+// setStat se llama desde iniciarCamara al primer frame; no se puede llamar
+// aqui porque `cammeta` y las refs de camara no existen todavía (DOMContentLoaded).
 
 // Un 500 de Flask devuelve una pagina HTML. Intentar parsearla como JSON da
 // "Unexpected token '<'", que no dice nada del problema real.
@@ -625,7 +627,7 @@ $('#bcam').onclick = async () => {
       `cámara ${v.videoWidth}×${v.videoHeight} → envío ${small.width}×${small.height} · ` +
       `${cam.sent} frames · ${cam.fps.toFixed(1)} fps · ` +
       `${$('#fast').checked ? 'SR en vivo (slow, ~4 fps)' : 'fluido 30 fps (sin SR)'} · ` +
-      `${rifeActive ? 'RIFE interp ON' : 'RIFE interp OFF'}` +
+      `${rifeActive && $('#fast').checked ? 'RIFE interp ON' : 'RIFE interp OFF'}` +
       `umbral ${$('#ccam').value}` +
       (cam.err ? ` · <b style="color:#e03c3c">${cam.err}</b>` : '');
   };
