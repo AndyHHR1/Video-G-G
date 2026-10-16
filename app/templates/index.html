@@ -655,22 +655,22 @@ $('#bcam').onclick = async () => {
   const cv = document.createElement('canvas');
   cv.width = v.videoWidth; cv.height = v.videoHeight;
   const ctx = cv.getContext('2d');
-  // segundo canvas, ya escalado, que es el que se envia
-  const small = document.createElement('canvas');
-  small.width = v.videoWidth > LIVE_W ? LIVE_W : v.videoWidth;
-  small.height = Math.round(v.videoHeight * small.width / v.videoWidth);
-  const sctx = small.getContext('2d');
-  // canvas de SALIDA: backing store fijo a LIVE_W (960 px), casi el ancho
-  // del contenedor (~944 px). El envío al servidor también es a 960 px
+   // segundo canvas, ya escalado, que es el que se envia
+   const LIVE_W = 960;
+   const small = document.createElement('canvas');
+   small.width = v.videoWidth > LIVE_W ? LIVE_W : v.videoWidth;
+   small.height = Math.round(v.videoHeight * small.width / v.videoWidth);
+   const sctx = small.getContext('2d');
+   // canvas de SALIDA: backing store fijo a LIVE_W (960 px), casi el ancho
+   // del contenedor (~944 px). El envío al servidor también es a 960 px
   // (encode ~7 ms, suficiente para 30 fps) pero en 1:1 con el canvas de salida
   // —nada de estiramiento ni borrura. CSS max-width:100% lo reduce a ~944 px
   // (casi 1:1). Antes el backing store era 1280 px en SR y 960 px en normal y
   // el canvas "saltaba" de tamaño; ahora es siempre 960 px → el cuadro no se
-  // achica al cambiar de modo.
-  const disp = document.createElement('canvas');
-  disp.classList.add('live');
-  const LIVE_W = 960;
-  disp.width = LIVE_W; disp.height = Math.round(LIVE_W * cv.height / cv.width);
+   // achica al cambiar de modo.
+   const disp = document.createElement('canvas');
+   disp.classList.add('live');
+   disp.width = LIVE_W; disp.height = Math.round(LIVE_W * cv.height / cv.width);
   // Se vacia el hueco y se reinserta el lienzo grande MAS la previsualizacion
   // en crudo: antes el `innerHTML=''` se comia la previsualizacion y solo
   // quedaba un lienzo a tamano natural, que se veía pequeno.
