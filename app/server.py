@@ -147,6 +147,7 @@ class Inferencer:
         self._rife: "RIFEInterpolator | None" = None
         self._prev_sr_frame: np.ndarray | None = None
         self._prev_dets: list | None = None  # para gate de estabilidad
+        self._last_sr_flag: bool = True  # para flush de cola al toggle SR
         # Estimación del ciclo SR (wall-clock entre key-frames) para programar
         # los interpolados de RIFE. EMA con α=0.3.
         self._sr_cycle_ms: float = 267.0
@@ -440,6 +441,18 @@ class Inferencer:
                 self._q.get_nowait()
             except queue.Empty:
                 break
+        # Flush de cola al cambiar de modo SR↔normal: si el worker está
+        # procesando un frame SR (~200 ms) y el browser ya envía normal
+        # (sr=False), los jobs SR viejños encolados bloquean el worker y
+        # la GIL contention durante ESGRAN/YOLO retrasa las respuestas async
+        # → fps cae a 5 y las cajas aparecen en posiciones obsoletas.
+        if self._last_sr_flag != sr:
+            self._last_sr_flag = sr
+            while not self._q.empty():
+                try:
+                    self._q.get_nowait()
+                except queue.Empty:
+                    break
         self._q.put((image, conf, imgsz, out))
         if self._async:
             # PEEK (no pop): devolver el último interp frame cuyo timestamp

@@ -709,9 +709,9 @@ $('#bcam').onclick = async () => {
         small.width = w; small.height = h;
         sctx.drawImage(cv, 0, 0, w, h);
       } else { small.width = w; small.height = h; sctx.drawImage(cv, 0, 0); }
-      const blob = await new Promise(r => {
-        const t = setTimeout(() => r(null), 500);  // safety: 500ms timeout
-        small.toBlob(r => { clearTimeout(t); r(r); }, 'image/jpeg', 0.8);
+      const blob = await new Promise(res => {
+        const t = setTimeout(() => res(null), 500);  // safety: 500ms timeout
+        small.toBlob(b => { clearTimeout(t); res(b); }, 'image/jpeg', 0.8);
       });
       if (!blob) throw new Error('el canvas no se pudo convertir en imagen');
       // Cuerpo binario crudo: evita el parser multipart de Werkzeug, que
@@ -762,7 +762,7 @@ $('#bcam').onclick = async () => {
         cam.fps = cam.sent / ((cam.last - cam.t0) / 1000);
         cam.sent = 0; cam.t0 = cam.last;
         setStat();
-      } else if (cam.err) setStat();
+      }
       cam.busy = false;
     }
   };
