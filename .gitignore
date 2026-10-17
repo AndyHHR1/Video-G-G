@@ -1,16 +1,75 @@
-# --- Entornos virtuales -------------------------------------------------------
+# =============================================================================
+#  .gitignore - Sistema de prevención de caídas en escaleras (UPAO)
+# =============================================================================
+
+# --- Entornos virtuales ------------------------------------------------------
+# Cualquier nombre habitual: .venv (scripts/setup.sh), venv, venvs de prueba,
+# el de Lambda Stack (--system-site-packages) o conda.
 .venv/
+.venv*/
 venv/
+venv*/
 env/
+ENV/
+.env/
+virtualenv/
+.conda/
+conda-env/
+.python-version
+pyvenv.cfg
+pip-selfcheck.json
+
+# --- Dependencias, empaquetado y compilación ---------------------------------
+# Las dependencias se instalan desde requirements/, nunca se versionan.
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+build/
+dist/
+wheels/
+sdist/
+*.egg
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+share/python-wheels/
+MANIFEST
+pip-log.txt
+pip-delete-this-directory.txt
+node_modules/
+
+# --- Cachés de herramientas y pruebas ----------------------------------------
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pytype/
+.dmypy.json
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.hypothesis/
+.ipynb_checkpoints/
+.cache/
 
 # --- Salidas de ejecución -----------------------------------------------------
 # Alertas y evidencia: contienen imágenes de personas (Ley N.º 29733).
 outputs/
 runs/
+wandb/
+mlruns/
+*.log
+nohup.out
+tmp/
+temp/
 
-# --- Datos ----------------------------------------------------------------------
-# Videos e imágenes de escenas reales: NUNCA se versionan (privacidad y peso).
-# La estructura esperada se documenta en data/README.md.
+# --- Datos (repositorios y carpetas aparte) ----------------------------------
+# El dataset se clona desde Hugging Face como repositorio propio
+# (scripts/get_dataset.sh) y los vídeos de escaleras se comparten aparte.
+# Ver data/README.md.
 data/*
 !data/README.md
 datasets/
@@ -26,6 +85,12 @@ escalera/
 *.mpeg
 *.mpg
 *.wmv
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.rar
+*.7z
 capturas/
 pruebas/
 Fase*.png
@@ -33,36 +98,50 @@ Fase*.jpg
 img_prueba*
 test_img*
 
-# --- Pesos de modelos ------------------------------------------------------------
-# Solo se versionan los pesos propios del proyecto y el COCO que usa el motor.
-# Los de Real-ESRGAN se descargan con tools/download_models.py.
+# --- Pesos de modelos ---------------------------------------------------------
+# Solo se versionan el Modelo S7 v4, el COCO que usa el motor y la base de su
+# entrenamiento. El resto (Real-ESRGAN, descargas automáticas de Ultralytics
+# como yolov8n.pt / yolo11n.pt) se obtiene con tools/download_models.py.
 *.pt
 *.pth
 *.onnx
+*.engine
+*.torchscript
+*.tflite
+*.safetensors
 !models/detector/escaleras_s7_v4.pt
 !models/coco/yolov8s.pt
 !models/base/yolov8s_zoom_v3.pt
 
-# --- Secretos ------------------------------------------------------------------
+# --- Secretos y credenciales -------------------------------------------------
 # PANEL_TOKEN (RQNF19) se lee de una variable de entorno, nunca del repo.
 .env
 .env.*
+!.env.example
 *.pem
 *.key
 *.p12
+*.pfx
+*.crt
 kaggle.json
+.netrc
+.huggingface/
+secrets/
 
-# --- Documentos temporales de Office -------------------------------------------
-~$*.docx
-.~lock.*
+# --- Archivos temporales de Office -------------------------------------------
+~$*
+.~lock.*#
+*.tmp
 
-# --- Python / sistema / editores -------------------------------------------------
-__pycache__/
-*.py[cod]
-*.egg-info/
-.pytest_cache/
+# --- Sistema operativo y editores --------------------------------------------
 .DS_Store
+._*
 Thumbs.db
-.kilo/
+desktop.ini
+*.swp
+*.swo
+*~
 .vscode/
 .idea/
+*.code-workspace
+.kilo/
