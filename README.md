@@ -658,6 +658,8 @@ por exigencia del documento de requisitos (ERS)** del curso. Detalle y evidencia
 
 ## 10. Cumplimiento de requisitos
 
+Resumen. El estado detallado de los 39 requisitos (incluidos RQF09–RQF11 y RQNF28 del avance), con su evidencia, está en la ERS: `docs/informe/ERS IEEE 830 - Sistema de prevención de caídas en escaleras.docx`.
+
 | Req. | Descripción | Estado |
 |---|---|---|
 | RQF01 | Captura continua de vídeo | **Cumple** — webcam del navegador y cámara IP |
@@ -668,7 +670,7 @@ por exigencia del documento de requisitos (ERS)** del curso. Detalle y evidencia
 | RQF06 | Persistencia temporal | **Desviación consciente** — 1.2 s / 0.6 s (§7) |
 | RQF07 | Alertas con evidencia | **Cumple** — evidencia anotada y anonimizada |
 | RQF08 | Panel de supervisión | **Cumple** |
-| RQNF01 | ≥ 30 fps | **Cumple en GPU** — 34 fps medidos (RTX 5070); en CPU ~7 fps |
+| RQNF01 | ≥ 30 fps | **No cumple con varias personas** — motor completo con esqueletos: 23 fps con 4 personas (RTX 5070); la vista en vivo va a 27-28 fps (asíncrona) |
 | RQNF02 | Latencia < 500 ms | **Cumple** — respuesta 4–5 ms, motor 27 ms |
 | RQNF03 | GPU ≥ 6 GB | **Supera** — funciona en 4 GB (GTX 1650) con el perfil `baja_vram`; pico medido 0.32 GB |
 | RQNF09 / RQNF26 | Estado operativo real | **Cumple** — `/api/health` |
@@ -676,8 +678,8 @@ por exigencia del documento de requisitos (ERS)** del curso. Detalle y evidencia
 | RQNF12 | Resiliencia a iluminación | **Cumple** — augmentations HSV; SR limpia ruido |
 | RQNF13 | Reconexión automática | **Cumple** — navegador (5 reintentos) y RTSP |
 | RQNF14 | Protección de datos | **Cumple** — §8 |
-| RQNF15 / 16 / 18 | Integridad, auditoría, no repudio | **Cumple** — imagen + línea JSON escritas juntas |
-| RQNF19 | Autenticación | **Cumple** — token compartido (no hay usuarios/roles) |
+| RQNF15 / 16 / 18 | Integridad, auditoría, no repudio | **Auditoría cumple; integridad y no repudio parciales** — imagen + línea JSON escritas juntas, sin firma criptográfica |
+| RQNF19 | Autenticación | **Parcial** — token compartido (no hay usuarios/roles) |
 | RQNF20 | Arquitectura modular | **Cumple** — §4.1 |
 | RQNF21 / 24 | Configuración externa | **Cumple** — `configs/app.yaml` |
 | RQNF22 | Pruebas con vídeo pregrabado | **Retirado por pedido del cliente** — el sistema es solo en vivo; una cámara IP/RTSP puede reproducir un vídeo grabado por `/api/stream` |

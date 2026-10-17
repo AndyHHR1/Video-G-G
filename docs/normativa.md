@@ -92,7 +92,7 @@ universidad privada para este tipo de sistema. En este proyecto son
 
 | Norma | Qué es | Evidencia en el proyecto |
 |---|---|---|
-| **IEEE 830-1998** (sucedida por **ISO/IEC/IEEE 29148**) | Especificación de requisitos de software | `docs/Caso.md` y el informe `docs/informe/Percepción v4 B.docx` (35 requisitos). |
+| **IEEE 830-1998** (sucedida por **ISO/IEC/IEEE 29148**) | Especificación de requisitos de software | `docs/Caso.md` y la ERS `docs/informe/ERS IEEE 830 - Sistema de prevención de caídas en escaleras.docx` (39 requisitos). |
 | **ISO/IEC 25010:2023** | Modelo de calidad del producto (9 características) | Cada requisito trazado a una característica (Apéndice C del informe; §10 del README). Modularidad (RQNF20) → capas del backend. |
 | **ISO/IEC 25000 (SQuaRE)** | Marco general de calidad | Pruebas automáticas (`tests/`), diagnóstico (`tools/check_env.py`). |
 | **ISO/IEC 42001:2023** | Sistema de gestión de IA (AIMS) | Modelo versionado y verificado por SHA-256; registro de cada alerta (`alertas.jsonl`); decisiones de diseño documentadas (`docs/decisiones.md`); supervisión humana. |
