@@ -1,0 +1,14 @@
+# Dataset de videos de Escaleras - generado por scripts/extract_escaleras_frames.py
+# NO editar a mano.
+path: /home/non/Video-G-G/datasets/escaleras_dataset
+train: images/train
+val: images/val
+test: images/test
+
+names:
+  0: persona_caido
+  1: persona_sentado
+  2: persona_erguida
+  3: escalera
+  4: persona
+  5: persona_desequilibrio

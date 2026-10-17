@@ -1,0 +1,6 @@
+# PyTorch con CUDA 12.8. Obligatorio para GPUs Blackwell (RTX 50xx, sm_120):
+# las builds con CUDA anterior no traen kernels para esa arquitectura.
+# También funciona en Turing/Ampere/Ada (RTX 20xx/30xx/40xx, GTX 16xx).
+--index-url https://download.pytorch.org/whl/cu128
+torch==2.11.0+cu128
+torchvision==0.26.0+cu128

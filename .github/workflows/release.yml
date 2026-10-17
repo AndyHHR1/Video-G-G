@@ -26,9 +26,9 @@ jobs:
           name: Supuesto Ideal - Sistema de Prevención de Caídas
           generate_release_notes: true
           files: |
-            runs/yolov8s_zoom/weights/best.pt
-            yolov8s.pt
-            setup.sh
+            models/base/yolov8s_zoom_v3.pt
+            models/coco/yolov8s.pt
+            scripts/setup.sh
 
   # Real-ESRGAN (semana 7): superresolución 4× en vivo. No toca el release
   # "Supuesto Ideal": este job solo corre en tags esrgan-previo-v*.
@@ -47,7 +47,7 @@ jobs:
           name: Versión con mejora de video real_esrgan_x4 pre correcciones (Por si quema este proyecto)
           generate_release_notes: true
           files: |
-            app/real_esrgan.py
-            app/build_esrgan.py
-            setup.sh
-            requirements.txt
+            backend/enhancement/archs.py
+            backend/enhancement/super_resolution.py
+            scripts/setup.sh
+            requirements/base.txt

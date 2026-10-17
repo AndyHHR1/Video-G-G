@@ -1,0 +1,3 @@
+# Herramientas de desarrollo (pruebas). Opcional.
+-r base.txt
+pytest>=8.0

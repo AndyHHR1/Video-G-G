@@ -1,0 +1,97 @@
+# =============================================================================
+#  Configuración de ejecución - Sistema de prevención de caídas en escaleras
+# =============================================================================
+# Todo lo que se puede ajustar sin tocar el código (RQNF21, RQNF24).
+# Las rutas relativas se resuelven desde la raíz del repositorio.
+# Cualquier valor se puede sobrescribir por línea de comandos:
+#     python -m backend --set engine.pose_every=4 --set server.port=8000
+
+server:
+  host: 127.0.0.1
+  port: 5000
+  debug: false
+  max_upload_mb: 512
+
+# 'auto' usa la GPU si existe; también 'cpu', 'cuda' o un índice (0, 1...).
+device: auto
+
+models:
+  # Modelo definitivo "Modelo S7 v4" (release v1.2.0-escaleras-v4).
+  # No se reentrena: es el entregable final.
+  detector: models/detector/escaleras_s7_v4.pt
+  # YOLOv8s COCO: localiza personas y objetos sobre la escalera.
+  coco: models/coco/yolov8s.pt
+  # Pesos de superresolución (Real-ESRGAN), descargados por tools/download_models.py
+  sr_dir: models/sr
+
+inference:
+  conf: 0.25          # umbral por defecto del detector (la interfaz lo ajusta)
+  imgsz: 640
+
+# Cadencias del motor: cada cuántos fotogramas se ejecuta cada etapa en vídeo
+# y cámara. Son números coprimos para que las etapas no coincidan en el mismo
+# fotograma y el coste por frame se mantenga estable (~30 fps en vivo).
+engine:
+  pose_every: 8
+  people_every: 6
+  stairs_every: 13
+  obstacle_every: 11
+  classify_every: 6
+  person_conf: 0.20
+  person_imgsz: 512
+  max_stairs_boxes: 2
+
+# Umbrales (RQF04). Ver README, sección "Desviaciones conscientes".
+thresholds:
+  prefilter: 0.75       # RQF04 pre-filtrado
+  confirm: 0.85         # RQF04 confirmación
+  obstacle: 0.25        # objetos pequeños sobre el escalón
+  alert: 0.35           # puerta de disparo de alerta
+  fall_crop_conf: 0.50  # caída vía recorte (sin pose) necesita al menos esto
+  fall_confirm_frames: 3
+
+# Persistencia y seguimiento (RQF05, RQF06)
+persistence:
+  alto_seconds: 1.2
+  medio_seconds: 0.6
+  default_seconds: 1.0
+  grace_seconds: 1.0       # histéresis: un parpadeo no reinicia la cuenta
+  occlusion_seconds: 1.0   # oclusión tolerada por el tracker IoU
+  cooldown_seconds: 15.0   # una alerta por persona y tipo cada 15 s como máximo
+  iou_match: 0.25
+
+# Alertas y evidencia (RQF07, RQNF16)
+alerts:
+  dir: outputs/alerts
+  keep_days: 7
+  max_images: 200
+
+# Privacidad (RQNF14, Ley N.º 29733)
+privacy:
+  anonymize_faces: true
+
+# Mejora de calidad de vídeo con Real-ESRGAN (x4)
+enhancement:
+  # auto = activa con GPU, desactivada en CPU (en CPU no llega a tiempo real)
+  enabled: auto
+  half: true                 # FP16 en GPU
+  live:
+    # Modelo ligero de la familia Real-ESRGAN pensado para vídeo:
+    # realesr-general-x4v3 (SRVGGNetCompact, ~1.2 M parámetros).
+    model: general_x4v3
+    input_max: 480           # lado mayor que entra a la red (~22 ms en RTX 5070)
+    output_width: 960        # ancho que se envía al navegador (lienzo del panel)
+    jpeg_quality: 80
+  uploads:
+    # Imagen fija: el modelo grande RealESRGAN_x4plus (RRDBNet, 16.7 M) prima
+    # calidad sobre velocidad. Se aplica ANTES de la detección.
+    image_model: x4plus
+    video_model: general_x4v3
+    input_max: 640
+    output_max: 2560
+
+# Fuente de la cámara del SERVIDOR para /api/stream (índice o URL RTSP/HTTP).
+# El modo "Cámara en vivo" del panel usa la webcam del navegador.
+camera:
+  source: 0
+  reconnect_attempts: 5
