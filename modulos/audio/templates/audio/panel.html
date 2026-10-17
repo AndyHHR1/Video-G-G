@@ -1,0 +1,186 @@
+{# Panel «Audio en vivo» del módulo modulos/audio.
+   Se incluye desde frontend/templates/index.html solo si el módulo cargó.
+   Marcado tomado del repo del grupo de audio (brigitteve/percepcion). #}
+  <!-- FLASH ALERT ACUSTICA (visible en cualquier pestaña) -->
+  <div id="apl-flash" class="apl-flash" role="alert" aria-live="assertive">
+    <span style="font-size:22px">🔊</span>
+    <span>ALERTA ACÚSTICA — Sonido compatible con posible caída detectado</span>
+    <button onclick="document.getElementById('apl-flash').style.display='none'"
+            style="background:rgba(255,255,255,.2);border:1px solid rgba(255,255,255,.4);
+                   color:#fff;border-radius:6px;padding:4px 12px;cursor:pointer;font-size:13px">✕</button>
+  </div>
+
+  <!-- AUDIO EN VIVO -->
+  <div class="panel" id="p-audio">
+    <div class="apl-grid">
+
+      <!-- columna izquierda: controles + vúmetro + métricas en vivo + demo/archivo -->
+      <div>
+        <!-- Controles principales -->
+        <div class="card" style="margin-bottom:14px">
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px">
+            <h2 style="margin:0">Módulo de Percepción de Sonido en Escaleras</h2>
+            <span id="apl-risk-badge" class="apl-badge apl-badge-bajo">RIESGO BAJO</span>
+          </div>
+          
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
+            <button id="apl-start">🎙 Activar micrófono</button>
+            <button id="apl-stop" class="ghost" disabled>⏹ Detener</button>
+            <span id="apl-state-chip" class="apl-chip chip-off">⏹ Detenido</span>
+          </div>
+
+          <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+            <label style="font-size:12.5px;display:flex;gap:6px;align-items:center">
+              <span style="color:var(--muted)">Sensibilidad (RF-07):</span>
+              <select id="apl-sensitivity" style="background:#111622;color:#fff;border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:12px">
+                <option value="alta">Alta (alta sensibilidad)</option>
+                <option value="media" selected>Media (calibrada)</option>
+                <option value="baja">Baja (ambientes ruidosos)</option>
+              </select>
+            </label>
+            <label style="font-size:12.5px;display:flex;gap:6px;align-items:center">
+              <input type="checkbox" id="apl-beep" checked>
+              Pitido sonoro
+            </label>
+            <button id="apl-notif-btn" class="ghost" style="font-size:12px;padding:4px 10px">🔔 Notificaciones SO</button>
+          </div>
+
+          <div id="apl-status" role="status" aria-live="polite"
+               style="margin-top:8px;font-size:12px;color:var(--muted);min-height:18px">Análisis acústico detenido.</div>
+          
+          <!-- Métricas en vivo (final.py) -->
+          <div class="apl-metrics-grid">
+            <div class="apl-metric-card">
+              <div class="apl-metric-title">Pisadas / s (onsets)</div>
+              <div class="apl-metric-val" id="apl-steps-val">—</div>
+            </div>
+            <div class="apl-metric-card">
+              <div class="apl-metric-title">Factor de cresta</div>
+              <div class="apl-metric-val" id="apl-crest-val">—</div>
+            </div>
+            <div class="apl-metric-card">
+              <div class="apl-metric-title">F0 vocal (pYIN)</div>
+              <div class="apl-metric-val" id="apl-f0-val">—</div>
+            </div>
+            <div class="apl-metric-card">
+              <div class="apl-metric-title">Pico RMS</div>
+              <div class="apl-metric-val" id="apl-peak-rms-val">—</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Vúmetro -->
+        <div class="card apl-vu-wrap" style="margin-bottom:14px">
+          <h2>Nivel de entrada del micrófono</h2>
+          <canvas id="apl-vu" height="28"></canvas>
+          <div class="apl-levels">
+            <span>RMS actual: <b id="apl-rms-value">0.0000</b></span>
+            <span>Nivel: <b id="apl-db-value">—</b></span>
+            <span style="color:#3fb85a">▌ Normal / Pasos</span>
+            <span style="color:#f2a83c">▌ Corriendo</span>
+            <span style="color:#e03c3c">▌ Impacto / Caída</span>
+          </div>
+        </div>
+
+
+        <!-- Demostración y archivo de AUDIO (funciones de final.py). El sistema no
+             acepta vídeos subidos: el archivo es solo de audio. -->
+        <div class="card" style="margin-bottom:14px">
+          <h2>Demostración y archivo de audio (final.py)</h2>
+          <div style="font-size:12px;color:var(--muted);margin-bottom:10px">
+            Prueba el pipeline acústico con la sesión simulada de final.py (con
+            <i>ground truth</i>) o con un archivo de audio grabado.
+          </div>
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
+            <button id="apl-btn-sim" style="background:#204060;font-size:12px;padding:7px 12px">
+              ⚡ Cargar sesión simulada (Demo UPAO)
+            </button>
+          </div>
+          <div style="border-top:1px solid var(--line);padding-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <input type="file" id="apl-file-input" accept="audio/*,.wav,.mp3,.m4a,.ogg,.flac,.opus"
+                   style="font-size:12px;flex:1;min-width:180px">
+            <label style="font-size:11.5px;color:var(--muted);display:flex;gap:4px;align-items:center">
+              <input type="checkbox" id="apl-file-improve" checked> Reducción de ruido
+            </label>
+            <button id="apl-file-btn" class="ghost" style="font-size:12px;padding:6px 12px">🚀 Analizar archivo</button>
+          </div>
+          <div id="apl-file-results" style="display:none;margin-top:12px">
+            <div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;margin-bottom:6px">
+              <b id="apl-fr-title" style="color:var(--text)">Resultados del análisis</b>
+              <span id="apl-fr-meta" style="color:var(--muted);font-size:11px"></span>
+            </div>
+            <div id="apl-fr-timeline" class="apl-timeline-box"></div>
+          </div>
+        </div>
+
+        <!-- Stats del motor -->
+        <div class="card">
+          <h2>Estado del motor acústico</h2>
+          <div class="apl-stats">
+            <div class="apl-stat">
+              <div class="apl-stat-label">Bloques procesados</div>
+              <div class="apl-stat-val" id="apl-chunks">—</div>
+            </div>
+            <div class="apl-stat">
+              <div class="apl-stat-label">Bloques descartados</div>
+              <div class="apl-stat-val" id="apl-dropped">—</div>
+            </div>
+            <div class="apl-stat">
+              <div class="apl-stat-label">Tiempo proceso (ms)</div>
+              <div class="apl-stat-val" id="apl-ms">—</div>
+            </div>
+            <div class="apl-stat">
+              <div class="apl-stat-label">Pipeline</div>
+              <div class="apl-stat-val" style="font-size:13px;color:#6ea8fe">Reglas final.py + MLP</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- columna derecha: alertas -->
+      <div>
+        <div class="card" style="margin-bottom:14px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+            <h2 style="margin:0">Alertas acústicas</h2>
+            <span class="req">Persistente (outputs/audio_alerts)</span>
+          </div>
+          
+          <div class="alert-box apl-log" id="apl-log">
+            <div class="apl-placeholder">Sin alertas acústicas registradas.</div>
+          </div>
+          <div class="alert-bar" style="margin-top:10px">
+            <a href="/api/alertas.zip" download="alertas.zip" class="abtn" id="apl-zip">Descargar ZIP</a>
+            <button id="apl-clear" class="abtn danger">Borrar todas</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Criterios de Riesgo Acústico (final.py)</h2>
+          <div style="font-size:12px;color:var(--muted);line-height:1.7">
+            <div style="margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid #1a202c">
+              <b style="color:#ff5555">🔴 ALTO — Caída en escaleras:</b><br>
+              Sonido de impacto súbito caracterizado por alto pico de energía RMS y elevado factor de cresta.
+            </div>
+            <div style="margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid #1a202c">
+              <b style="color:#ff5555">🔴 ALTO — Pedido de auxilio:</b><br>
+              Frecuencia fundamental F0 de un grito o voz angustiada detectada mediante pYIN (180 a 1100 Hz).
+            </div>
+            <div style="margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid #1a202c">
+              <b style="color:#f2a83c">🟡 MEDIO — Persona corriendo:</b><br>
+              Alta frecuencia de pisadas por segundo (cadencia de onsets &ge; 2.8 pasos/s).
+            </div>
+            <div style="margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid #1a202c">
+              <b style="color:#f2a83c">🟡 MEDIO — Posible caída (clasificador ML):</b><br>
+              MLP calibrado de seis clases del grupo (caída, portazo, objeto que cae, pasos,
+              voz/TV, ruido) sobre 1,5 s alrededor del impacto, con vetos y evaluación de los
+              7 s posteriores. Requiere verificación humana.
+            </div>
+            <div>
+              <b style="color:#3fb85a">🟢 BAJO — Tránsito seguro / caminando:</b><br>
+              Cadencia normal de pisadas (0.7 a 2.7 pasos/s) o ruido de fondo normal.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>

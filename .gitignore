@@ -145,3 +145,6 @@ desktop.ini
 .idea/
 *.code-workspace
 .kilo/
+
+# Módulo de audio: fixtures sintéticos de sus scripts
+modulos/audio/.test-runtime/

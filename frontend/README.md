@@ -2,11 +2,16 @@
 
 Panel web servido por Flask (`backend/api/system.py` → `render_template`).
 
-- `templates/index.html` — panel: pestañas Imagen, Vídeo, Cámara en vivo y Clases.
+- `templates/index.html` — panel: pestañas **Cámara en vivo**, **🎙 Audio**,
+  **🖼 Imagen** y **Clases**, y el botón **«⏻ Detener sistema»**.
 - `templates/login.html` — acceso cuando se define `PANEL_TOKEN`.
 
-Por requisito del cliente **el plano de la interfaz es el mismo** que en
-`semana-7`. El único cambio es el texto de la casilla de mejora de calidad
-(antes «SR en vivo (≈4 fps)», ahora «Mejora de calidad (Real-ESRGAN x4)»),
-porque la mejora ya funciona en tiempo real. El resto de cambios se hizo en el
-backend, respetando el mismo contrato de la API (README principal, §12).
+El vídeo es **solo en vivo**: se quitaron las pestañas de imagen y vídeo subidos.
+Las pestañas Audio e Imagen no viven aquí: `index.html` solo incluye
+`audio/panel.html` e `imagen/panel.html`, que aportan los módulos de `modulos/`
+(cada uno con sus propios JS/CSS en `/modulos/<nombre>/static/`). Si un módulo
+no carga, su pestaña no aparece y el resto del panel funciona igual.
+
+El estilo es el mismo que en `semana-7`; la cámara en vivo no cambió salvo que
+el monitor del micrófono de la webcam empieza silenciado y plegado (para no
+realimentar al micrófono que analiza la pestaña Audio).

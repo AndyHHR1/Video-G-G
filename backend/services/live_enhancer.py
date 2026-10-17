@@ -3,7 +3,8 @@
 La superresolución en vivo NO pasa por el hilo de detección: así la detección
 mantiene su ritmo y la mejora va en paralelo. Cada fotograma que llega con
 "SR en vivo" activado se deposita en una ranura de "solo el último"; el hilo
-lo amplía con `realesr-general-x4v3` (~22 ms en una RTX 5070 con FP16), lo
+lo amplía con `realesr-general-x4v3` (~22 ms en una RTX 5070 con FP16; en
+una GTX 1650 el perfil `baja_vram` usa FP32 y entrada de 320 px), lo
 reduce al ancho del panel y guarda el JPEG en base64 asociado a su `frame_id`.
 
 La API devuelve la versión mejorada del MISMO fotograma que analizó el
@@ -35,6 +36,7 @@ class LiveEnhancer:
         self._slot: tuple | None = None
         self._cache: OrderedDict = OrderedDict()
         self._latest: tuple | None = None
+        self._stop = False
         self._ready = threading.Event()
         self._thread = threading.Thread(target=self._run, name="live-sr",
                                         daemon=True)
@@ -69,6 +71,15 @@ class LiveEnhancer:
             self._latest = None
             self._slot = None
 
+    def stop(self, timeout: float = 5.0) -> None:
+        """Detiene el hilo y libera la red de la GPU."""
+        with self._cond:
+            self._stop = True
+            self._cond.notify()
+        self._thread.join(timeout)
+        self.clear()
+        self._sr = None
+
     # ------------------------------------------------------------------ #
     def _run(self) -> None:
         import time
@@ -85,8 +96,10 @@ class LiveEnhancer:
             return
         while True:
             with self._cond:
-                while self._slot is None:
+                while self._slot is None and not self._stop:
                     self._cond.wait()
+                if self._stop:
+                    return
                 frame, fid = self._slot
                 self._slot = None
             try:

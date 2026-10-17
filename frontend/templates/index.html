@@ -102,96 +102,44 @@
           padding-top:10px; border-top:1px solid var(--line); }
   a { color:var(--accent); }
   video { width:100%; border-radius:8px; }
+  .sel { background:#171a21; color:#e6e9ef; border:1px solid #262b36; border-radius:5px; padding:4px; }
+  /* cabecera con el botón de parada del sistema */
+  .top { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap; }
+  .btn-stop { background:#3a1c1c; border:1px solid #5c2b2b; color:#f0a0a0; }
+  .btn-stop:hover { background:#5c2020; border-color:var(--alto); color:#fff; }
+  .mods { display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
+  .mod { font-size:11px; padding:2px 8px; border-radius:9px; border:1px solid var(--line); color:var(--muted); }
+  .mod.ok { color:#3fb85a; border-color:#1f6e3a; }
+  .mod.off { color:#e88; border-color:#5c2b2b; }
+  .src-audio { border-left:3px solid #6ea8fe; }
+  #stopped { display:none; position:fixed; inset:0; z-index:10000; background:rgba(10,12,16,.94);
+             align-items:center; justify-content:center; flex-direction:column; gap:12px;
+             text-align:center; padding:24px; }
+  #stopped h2 { font-size:18px; color:var(--text); text-transform:none; letter-spacing:0; }
+  @media (max-width: 900px) { .grid { grid-template-columns:1fr; } }
 </style>
+{% if modules.get('audio') %}<link rel="stylesheet" href="/modulos/audio/static/audio-panel.css">{% endif %}
 </head>
 <body>
 <div class="wrap">
-  <h1>Prevención de Caídas y Riesgos en Escaleras</h1>
-  <div class="sub">Plataforma de pruebas local · YOLOv8 · 6 clases · <span id="dev">—</span></div>
+  <div class="top">
+    <div>
+      <h1>Prevención de Caídas y Riesgos en Escaleras</h1>
+      <div class="sub" style="margin-bottom:4px">Vídeo en vivo · YOLOv8 · 6 clases · <span id="dev">—</span></div>
+      <div class="mods" id="mods"></div>
+    </div>
+    <button id="bsys" class="btn-stop" title="Detiene todo el sistema: cámara, audio, imagen, modelos y servidor">⏻ Detener sistema</button>
+  </div>
 
-  <div class="tabs">
-    <div class="tab on" data-p="img">Imagen</div>
-    <div class="tab" data-p="vid">Video</div>
-    <div class="tab" data-p="cam">Cámara en vivo</div>
+  <div class="tabs" style="margin-top:14px">
+    <div class="tab on" data-p="cam">Cámara en vivo</div>
+    {% if modules.get('audio') %}<div class="tab" data-p="audio" id="tab-audio">🎙 Audio<span class="tab-badge" id="apl-tab-badge"></span></div>{% endif %}
+    {% if modules.get('imagen') %}<div class="tab" data-p="imagen">🖼 Imagen</div>{% endif %}
     <div class="tab" data-p="info">Clases y requisitos</div>
   </div>
 
-  <!-- IMAGEN -->
-  <div class="panel on" id="p-img">
-    <div class="grid">
-      <div>
-        <div class="ctrl">
-          <input type="file" id="fimg" accept="image/*">
-          <label>Umbral <input type="range" id="cimg" min="0.05" max="0.90" step="0.05" value="0.25">
-            <b id="cvimg">0.25</b></label>
-          <button id="bimg">Analizar</button>
-        </div>
-        <div class="stage" id="simg">
-          <div class="placeholder">Selecciona una imagen y pulsa «Analizar»</div>
-        </div>
-      </div>
-      <div>
-        <div class="card" style="margin-bottom:16px">
-          <h2>Alertas · RQF08</h2>
-          <div class="alert-box" id="alertbox1"><div class="req">Sin alertas.</div></div>
-<div class="alert-bar">
-              <a id="zip1" href="/api/alertas.zip" download="alertas.zip"
-                 class="abtn">Descargar todo (ZIP)</a>
-              <button id="borrarSel1" class="abtn ghost">Borrar seleccionadas</button>
-              <button id="borrarTodo1" class="abtn danger">Borrar todas</button>
-            </div>
-          <a id="zipbtn" href="/api/alertas.zip" download="alertas.zip"
-             style="display:none;margin-top:10px;background:#4c8dff;color:#fff;
-                    border-radius:7px;padding:8px 14px;font-size:13px;text-decoration:none;
-                    display:inline-block">Descargar todo (ZIP)</a>
-        </div>
-        <div id="rimg"></div>
-        <div class="card" style="margin-top:16px">
-          <h2>Detecciones</h2>
-          <div id="timg" class="placeholder" style="padding:20px 0">Sin resultados</div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- VIDEO -->
-  <div class="panel" id="p-vid">
-    <div class="grid">
-      <div>
-        <div class="ctrl">
-          <input type="file" id="fvid" accept="video/*">
-          <label>Umbral <input type="range" id="cvid" min="0.05" max="0.90" step="0.05" value="0.25">
-            <b id="cvvid">0.25</b></label>
-          <button id="bvid">Procesar video</button>
-        </div>
-        <div class="stage" id="svid" style="flex-direction:column;gap:10px;padding:12px">
-          <div class="placeholder" style="padding:40px 20px">Selecciona un video (mp4/avi) y pulsa «Procesar»</div>
-        </div>
-      </div>
-      <div>
-        <div class="card" style="margin-bottom:16px">
-          <h2>Alertas · RQF08</h2>
-          <div class="alert-box" id="alertbox2"><div class="req">Sin alertas.</div></div>
-<div class="alert-bar">
-              <a id="zip2" href="/api/alertas.zip" download="alertas.zip"
-                 class="abtn">Descargar todo (ZIP)</a>
-              <button id="borrarSel2" class="abtn ghost">Borrar seleccionadas</button>
-              <button id="borrarTodo2" class="abtn danger">Borrar todas</button>
-            </div>
-        </div>
-        <div class="card">
-          <h2>Procesado local</h2>
-          <div style="font-size:12.5px;color:var(--muted);line-height:1.6">
-            El video se decodifica, se infiere frame a frame en la GPU y se vuelve a codificar
-            con las cajas dibujadas. El progreso aparece en la consola del servidor.
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-
   <!-- CAMARA -->
-  <div class="panel" id="p-cam">
+  <div class="panel on" id="p-cam">
     <div class="grid">
       <div>
         <div class="ctrl">
@@ -200,7 +148,7 @@
           <label>Umbral <input type="range" id="ccam" min="0.05" max="0.90" step="0.05" value="0.25">
             <b id="cvcam">0.25</b></label>
           <label>Enviar cada
-            <select id="rate" style="background:#171a21;color:#e6e9ef;border:1px solid #262b36;border-radius:5px;padding:4px">
+            <select id="rate" class="sel">
               <option value="100">10 fps</option>
               <option value="66">15 fps</option>
               <option value="50">20 fps</option>
@@ -216,11 +164,22 @@
           <div class="placeholder">Pulsa «Conectar webcam» para usar la cámara de este equipo</div>
         </div>
         <div id="cammeta" style="margin-top:10px;font-size:12.5px;color:var(--muted)"></div>
+        <details id="cam-mic" style="display:none;margin-top:8px">
+          <summary style="font-size:12px;color:var(--muted);cursor:pointer">Escuchar micrófono de la webcam (silenciado por defecto)</summary>
+          <div id="audio-monitor"></div>
+        </details>
+        {% if modules.get('audio') %}
+        <div class="card" style="margin-top:12px;font-size:12.5px;color:var(--muted);line-height:1.6">
+          El análisis acústico (pisadas, carrera, impacto de caída, gritos y clasificador ML)
+          está en la pestaña <a href="#" id="cam-audio-link" style="font-weight:600">🎙 Audio</a>.
+          Puede funcionar a la vez que la cámara.
+        </div>
+        {% endif %}
       </div>
       <div>
         <div class="card" id="camrisk"></div>
         <div class="card" style="margin-bottom:16px">
-          <h2>Alertas · RQF08</h2>
+          <h2>Alertas · RQF08 <span class="req" style="text-transform:none;letter-spacing:0">(vídeo{% if modules.get('audio') %} + audio{% endif %})</span></h2>
           <div class="alert-box" id="alertbox3"><div class="req">Sin alertas.</div></div>
 <div class="alert-bar">
               <a id="zip3" href="/api/alertas.zip" download="alertas.zip"
@@ -235,13 +194,16 @@
             Coloca la cámara fija mirando una escalera y pide a alguien que la recorra.
             <br><br>
             La imagen de la izquierda es la que ve el navegador; el modelo corre
-            en el servidor. Cada frame enviado se devuelve ya anotado, con la
-            banda de FPS y riesgo.
+            en el servidor. El sistema trabaja solo con vídeo en vivo: no se
+            suben vídeos.
           </div>
         </div>
       </div>
     </div>
   </div>
+
+  {% if modules.get('audio') %}{% include "audio/panel.html" %}{% endif %}
+  {% if modules.get('imagen') %}{% include "imagen/panel.html" %}{% endif %}
 
   <!-- INFO -->
   <div class="panel" id="p-info">
@@ -268,27 +230,55 @@
   </div>
 </div>
 
+<div id="stopped" role="alertdialog" aria-live="assertive">
+  <h2 id="stopped-t">Deteniendo el sistema…</h2>
+  <div class="req" id="stopped-m">Se están cerrando la cámara, el audio, la imagen, los modelos y el servidor.</div>
+</div>
+
+{% if modules.get('audio') %}
+<script src="/modulos/audio/static/audio-live.js"></script>
+<script src="/modulos/audio/static/audio-panel.js"></script>
+{% endif %}
+{% if modules.get('imagen') %}<script src="/modulos/imagen/static/imagen-panel.js"></script>{% endif %}
 <script>
 const $ = s => document.querySelector(s);
 const BGR = c => `rgb(${c[2]},${c[1]},${c[0]})`;
 
-// pestanas
+// pestanas. La cámara sigue activa en «Audio» y «Clases» (vídeo y audio
+// pueden percibir a la vez); se detiene al entrar en «Imagen», que abre su
+// propia cámara. La cámara de Imagen se detiene al salir de su pestaña.
 document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
   document.querySelectorAll('.tab').forEach(x => x.classList.remove('on'));
   document.querySelectorAll('.panel').forEach(x => x.classList.remove('on'));
   t.classList.add('on'); $('#p-' + t.dataset.p).classList.add('on');
-  if (t.dataset.p !== 'cam') stopCam();
+  if (t.dataset.p === 'imagen' && cam.on) stopCam();
+  if (t.dataset.p !== 'imagen' && window.imagenPanel) window.imagenPanel.stop();
+  if (t.dataset.p === 'audio') {
+    if (typeof initAudioPanel === 'function') initAudioPanel();
+    const badge = $('#apl-tab-badge');
+    if (badge) badge.style.display = 'none';
+    const vc = document.getElementById('apl-vu');
+    if (vc) vc.width = vc.offsetWidth || 480;
+  }
 });
+const _camAudioLink = document.getElementById('cam-audio-link');
+if (_camAudioLink) _camAudioLink.onclick = e => {
+  e.preventDefault(); document.querySelector('.tab[data-p="audio"]')?.click();
+};
 
-// deslizadores
-[['cimg','cvimg'],['cvid','cvvid'],['ccam','cvcam']].forEach(([i,o]) => {
-  $('#'+i).oninput = e => $('#'+o).textContent = (+e.target.value).toFixed(2);
-});
+// deslizador
+$('#ccam').oninput = e => $('#cvcam').textContent = (+e.target.value).toFixed(2);
 
-// salud
+// salud y estado de los módulos
 fetch('/api/health').then(r=>r.json()).then(d => {
-  $('#dev').textContent = `dispositivo: ${d.device} · pesos: ${d.weights.split('/').slice(-2).join('/')}`;
-});
+  const hw = d.hardware || {};
+  $('#dev').textContent = `dispositivo: ${d.device} · perfil ${hw.perfil || '—'} · ` +
+                          `pesos: ${d.weights.split('/').slice(-2).join('/')}`;
+  const mods = d.modulos || {};
+  $('#mods').innerHTML = Object.entries(mods).map(([k, m]) =>
+    `<span class="mod ${m.ok ? 'ok' : 'off'}" title="${(m.estado||'').replace(/"/g,'&quot;')}">` +
+    `${k === 'audio' ? '🎙 audio' : k === 'imagen' ? '🖼 imagen' : k}: ${m.ok ? 'activo' : 'no disponible'}</span>`).join('');
+}).catch(() => {});
 // setStat se llama desde iniciarCamara al primer frame; no se puede llamar
 // aqui porque `cammeta` y las refs de camara no existen todavía (DOMContentLoaded).
 
@@ -364,8 +354,7 @@ function detTable(dets) {
     const nombre = d.class_name || d.objeto ||
                    String(d.tipo || '?').replace(/_/g, ' ');
     const conf = (d.confidence ?? d.conf ?? 0);
-    // /api/detect devuelve la caja en PIXELES y /api/frame en normalizado,
-    // asi que no se pone ninguna unidad: se muestran los valores tal cual.
+    // /api/frame devuelve la caja normalizada (0..1): se muestra tal cual.
     const caja = Array.isArray(d.bbox)
       ? d.bbox.join(', ')
       : '<span class="req">' + (d.ref || '—') + '</span>';
@@ -375,43 +364,6 @@ function detTable(dets) {
   return h + '</table>';
 }
 
-// ---------- imagen ----------
-$('#bimg').onclick = async () => {
-  const f = $('#fimg').files[0];
-  if (!f) return alert('Selecciona una imagen primero');
-  const fd = new FormData();
-  fd.append('file', f); fd.append('conf', $('#cimg').value);
-  $('#bimg').disabled = true; $('#bimg').textContent = 'Analizando…';
-  try {
-    const r = await fetch('/api/detect', {method:'POST', body:fd});
-    const d = await readJson(r);
-    if (d.error) { alert(d.error); return; }
-    const b64 = hexToB64(d.image);
-    $('#simg').innerHTML =
-      `<img src="data:image/jpeg;base64,${b64}">
-       <div style="margin-top:10px">
-         <a id="dl-img" download="analisis_" + (f.name.replace(/\W+/g,'_')) + ".jpg"
-            href="data:image/jpeg;base64,${b64}"
-            style="background:#4c8dff;color:#fff;border-radius:7px;padding:8px 14px;
-                   font-size:13px;text-decoration:none;display:inline-block">
-           Descargar imagen con las cajas</a>
-       </div>`;
-    $('#rimg').innerHTML = riskBox(d.summary) + `
-      <div class="card">
-        <h2>Métricas</h2>
-        <div class="stat"><span>Inferencia</span><b>${d.inference_ms} ms</b></div>
-        <div class="stat"><span>Resolución</span><b>${d.size[0]}×${d.size[1]}</b></div>
-        <div class="stat"><span>FPS estimado</span><b>${(1000/d.inference_ms).toFixed(1)}</b></div>
-        <div class="stat"><span>Detecciones</span><b>${d.summary.n}</b></div>
-      </div>`;
-    $('#rimg').innerHTML += riskPanels(d);
-    $('#timg').innerHTML = detTable(d.detections);
-    cargarAlertas();
-  } finally {
-    $('#bimg').disabled = false; $('#bimg').textContent = 'Analizar';
-  }
-};
-
 function hexToB64(hex) {
   const b = new Uint8Array(hex.length / 2);
   for (let i = 0; i < b.length; i++) b[i] = parseInt(hex.substr(i*2, 2), 16);
@@ -419,30 +371,6 @@ function hexToB64(hex) {
     s += String.fromCharCode.apply(null, b.subarray(i, i+8192));
   return btoa(s);
 }
-
-// ---------- video ----------
-$('#bvid').onclick = async () => {
-  const f = $('#fvid').files[0];
-  if (!f) return alert('Selecciona un video primero');
-  const fd = new FormData();
-  fd.append('file', f); fd.append('conf', $('#cvid').value);
-  $('#bvid').disabled = true; $('#bvid').textContent = 'Procesando… (mira la consola)';
-  $('#svid').innerHTML = '<div class="placeholder" style="padding:40px 20px">Procesando frame a frame…</div>';
-  try {
-    const r = await fetch('/api/video', {method:'POST', body:fd});
-    if (!r.ok) { const e = await readJson(r).catch(x => ({error: x.message})); alert(e.error || 'Error'); $('#svid').innerHTML=''; return; }
-    // La salida es H.264: OpenCV solo sabe escribir MPEG-4 Part 2, que los
-    // navegadores no reproducen, asi que el servidor lo recodifica.
-    const url = URL.createObjectURL(await r.blob());
-    $('#svid').innerHTML = `<video src="${url}" controls autoplay loop muted playsinline></video>
-      <div style="font-size:12.5px;color:#8b93a5">Resultado anotado (H.264)</div>`;
-  } catch (e) {
-    $('#svid').innerHTML = `<div class="placeholder" style="max-width:520px">Error: ${e.message}</div>`;
-  } finally {
-    $('#bvid').disabled = false; $('#bvid').textContent = 'Procesar video';
-  }
-};
-
 
 // Dibuja el frame y las cajas sobre el canvas de salida. El servidor devuelve
 // las cajas en coordenadas normalizadas (0..1), asi que se escalan al canvas.
@@ -524,6 +452,7 @@ function stopCam() {
   if (cam.stream) { cam.stream.getTracks().forEach(t => t.stop()); cam.stream = null; }
   if (cam.video) { cam.video.remove(); cam.video = null; }
   if (audioEl) { audioEl.remove(); audioEl = null; }
+  const _mic = document.getElementById('cam-mic'); if (_mic) _mic.style.display = 'none';
   document.querySelectorAll('#scam video').forEach(v => v.remove());
    cam.sent = 0; cam.err = null; cam.ok = false; cam.fps = 0; cam.t0 = 0;
    cam.busy = false;  // por si un sendFrame pendiente quedó cam.ok stuck
@@ -608,8 +537,14 @@ $('#bcam').onclick = async () => {
       audioEl.srcObject = cam.stream;
       audioEl.autoplay = true;
       audioEl.playsInline = true;
-      audioEl.style.cssText = 'position:absolute;right:10px;bottom:80px;width:22%;min-width:130px;border:1px solid #262b36;border-radius:6px;z-index:5';
-      document.body.appendChild(audioEl);
+      // Empieza silenciado (como en la integración del grupo de audio): el
+      // altavoz no debe realimentar al micrófono que analiza la pestaña Audio.
+      audioEl.muted = true;
+      audioEl.controls = true;
+      audioEl.title = 'Micrófono de la webcam (silenciado; actívalo si quieres oírlo)';
+      audioEl.style.cssText = 'width:100%;max-width:360px;height:40px;margin-top:8px';
+      $('#audio-monitor').appendChild(audioEl);
+      $('#cam-mic').style.display = 'block';
       audioEl.play().catch(() => {
         // Autoplay bloqueado: al primer click en cualquier parte se desmutea.
         const unlock = () => { document.removeEventListener('click', unlock); audioEl.play().catch(()=>{}); };
@@ -829,8 +764,8 @@ $('#bcam').onclick = async () => {
   cam.video = v;
 };
 
-// Panel de alertas (RQF08). Lee el historial del servidor y lo pinta en los
-// tres pestanas.
+// Panel de alertas (RQF08). Lee el historial del servidor (vídeo y, si el
+// módulo está activo, audio) y lo pinta en la pestaña de cámara.
 const SEV_TXT = {ALTO:'Crítico', MEDIO:'Precaución', BAJO:'Bajo', NEUTRO:'-', CONTEXTO:'-'};
 async function cargarAlertas() {
   let d;
@@ -838,27 +773,31 @@ async function cargarAlertas() {
   catch (e) { return; }
   const lista = d.alertas || [];
   const html = lista.length ? lista.map(a => `
-    <div class="alert-item ${a.severity==='ALTO'?'alert-alto':'alert-medio'}" data-id="${a.alert_id}">
+    <div class="alert-item ${a.severity==='ALTO'?'alert-alto':'alert-medio'} ${a.source==='audio'?'src-audio':''}" data-id="${a.alert_id}">
       <input type="checkbox" class="alert-sel" value="${a.alert_id}" title="Seleccionar">
        ${a.imagen ? `<a href="${a.imagen}" download title="Descargar">
            <img src="${a.imagen}" alt=""></a>`
-           : '<div style="width:96px;height:66px;background:#0d0f14;border-radius:5px"></div>'}
+           : a.source === 'audio'
+             ? '<div style="width:96px;height:66px;background:#0d0f14;border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:26px">🔊</div>'
+             : '<div style="width:96px;height:66px;background:#0d0f14;border-radius:5px"></div>'}
         <div style="min-width:0;flex:1">
         <div class="alert-tipo">${(a.risk_type||'').replace(/_/g,' ')}
-          <span class="badge">${SEV_TXT[a.severity]||a.severity}</span></div>
-        <div class="alert-meta">${(a.timestamp||'').replace('T',' ')} · ${a.duration_s}s ·
-           id ${a.track_id}</div>
+          <span class="badge">${SEV_TXT[a.severity]||a.severity}</span>
+          ${a.source === 'audio' ? '<span class="badge">audio</span>' : ''}</div>
+        <div class="alert-meta">${(a.timestamp||'').replace('T',' ').replace(/\.\d+/, '').replace('+00:00',' UTC')} · ${a.source === 'audio'
+          ? `transmisión ${(a.stream_id||'').slice(0,10)} · t=${a.impact_offset_s}s`
+          : `${a.duration_s}s · id ${a.track_id}`}</div>
         <div class="alert-meta">${a.risk_ref||''}</div>
         ${a.description ? `<div class="alert-desc">${a.description}</div>` : ''}
       </div>
       <button class="alert-x" data-del="${a.alert_id}" title="Borrar esta alerta">×</button>
     </div>`).join('') : '<div class="req">Sin alertas registradas.</div>';
-  for (const id of ['alertbox1','alertbox2','alertbox3']) {
+  for (const id of ['alertbox3']) {
     const el = document.getElementById(id);
     if (el) el.innerHTML = html;
   }
   const hay = (d.total || 0) > 0;
-  for (const n of [1,2,3]) {
+  for (const n of [3]) {
     const z = document.getElementById('zip' + n);
     const b1 = document.getElementById('borrarSel' + n);
     const b2 = document.getElementById('borrarTodo' + n);
@@ -899,20 +838,52 @@ document.addEventListener('DOMContentLoaded', () => {
   document.addEventListener('click', (ev) => {
     const del = ev.target.closest('[data-del]');
     if (del) { ev.stopPropagation(); borrar([del.dataset.del], 'Borrar esta alerta'); return; }
-    const sel = ev.target.closest('#borrarSel1,#borrarSel2,#borrarSel3');
+    const sel = ev.target.closest('#borrarSel3');
     if (sel) { const ids = idsSeleccionados();
       if (!ids.length) { alert('No hay ninguna seleccionada. Marca las casillas.'); return; }
       borrar(ids, 'Borrar ' + ids.length + ' alerta(s)'); return; }
-    const all = ev.target.closest('#borrarTodo1,#borrarTodo2,#borrarTodo3');
+    const all = ev.target.closest('#borrarTodo3');
     if (all) { borrar(null, 'Borrar TODAS las alertas y sus imagenes. No se puede deshacer'); }
   });
 
   // deseleccionar al recargar
-  for (const id of ['alertbox1','alertbox2','alertbox3']) {
+  for (const id of ['alertbox3']) {
     const el = document.getElementById(id);
     if (el) el.addEventListener('change', () => { /* mantiene el estado */ });
   }
 
+
+// ---------- detener el sistema ----------
+// Función interna para PARAR todo el proyecto: primero se cierran en el
+// navegador la cámara, el micrófono y la cámara de Imagen; luego se pide al
+// servidor que libere modelos y se apague (POST /api/system/stop).
+async function detenerSistema() {
+  if (!confirm('¿Detener TODO el sistema? Se cerrarán la cámara, el audio, ' +
+               'la imagen, los modelos y el servidor. Para volver a usarlo hay ' +
+               'que arrancarlo de nuevo desde la consola.')) return;
+  try { stopCam(); } catch (e) {}
+  try { window.imagenPanel && window.imagenPanel.stop(); } catch (e) {}
+  try { const ap = typeof initAudioPanel === 'function' && initAudioPanel();
+        if (ap) ap._disconnect(); } catch (e) {}
+  $('#stopped').style.display = 'flex';
+  let ok = false;
+  try {
+    const r = await fetch('/api/system/stop', {method:'POST'});
+    const d = await r.json().catch(() => ({}));
+    ok = r.ok;
+    if (!ok) { $('#stopped-t').textContent = 'No se pudo detener';
+               $('#stopped-m').textContent = d.error || ('HTTP ' + r.status); return; }
+  } catch (e) { ok = true; }      // el servidor puede cortar la conexión al apagarse
+  for (let i = 0; i < 40; i++) {  // espera a que deje de responder (~20 s máx.)
+    await new Promise(r => setTimeout(r, 500));
+    try { await fetch('/api/system/status', {cache:'no-store'}); }
+    catch (e) { break; }
+  }
+  $('#stopped-t').textContent = 'Sistema detenido';
+  $('#stopped-m').textContent = 'Modelos liberados y servidor apagado. ' +
+    'Para volver a usarlo: python -m backend (o scripts/run.sh).';
+}
+$('#bsys').onclick = detenerSistema;
 
 function camFail(msg) {
   $('#scam').innerHTML = `<div class="placeholder" style="max-width:520px">${msg}</div>`;

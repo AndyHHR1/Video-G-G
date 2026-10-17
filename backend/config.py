@@ -21,7 +21,9 @@ class ServerCfg:
     host: str = "127.0.0.1"
     port: int = 5000
     debug: bool = False
-    max_upload_mb: int = 512
+    # Solo para los módulos aparte (fotografía de Imagen, archivo de Audio):
+    # el vídeo es únicamente en vivo y no acepta subidas.
+    max_upload_mb: int = 64
 
 
 @dataclass
@@ -91,25 +93,45 @@ class LiveSRCfg:
 
 
 @dataclass
-class UploadSRCfg:
-    image_model: str = "x4plus"
-    video_model: str = "general_x4v3"
-    input_max: int = 640
-    output_max: int = 2560
-
-
-@dataclass
 class EnhancementCfg:
     enabled: Any = "auto"          # True / False / "auto"
     half: bool = True
     live: LiveSRCfg = field(default_factory=LiveSRCfg)
-    uploads: UploadSRCfg = field(default_factory=UploadSRCfg)
 
 
 @dataclass
 class CameraCfg:
     source: Any = 0                # índice de cámara o URL (rtsp://, http://)
     reconnect_attempts: int = 5
+
+
+def _baja_vram_default() -> dict:
+    return {"enhancement.half": False,
+            "enhancement.live.input_max": 320}
+
+
+@dataclass
+class HardwareCfg:
+    profile: str = "auto"          # auto | normal | baja_vram
+    low_vram_gb: float = 4.5       # auto: <= esta VRAM -> baja_vram
+    baja_vram: dict = field(default_factory=_baja_vram_default)
+    # Rellenados en el arranque por backend.hardware.apply_profile
+    active: str = "normal"
+    gpu: dict = field(default_factory=dict)
+
+
+@dataclass
+class ModuleCfg:
+    """Módulos aparte (modulos/audio, modulos/imagen). Se cargan sin tocar el
+    vídeo: si fallan, el vídeo en vivo sigue funcionando."""
+    enabled: bool = True
+    options: dict = field(default_factory=dict)
+
+
+@dataclass
+class ModulesCfg:
+    audio: ModuleCfg = field(default_factory=ModuleCfg)
+    imagen: ModuleCfg = field(default_factory=ModuleCfg)
 
 
 @dataclass
@@ -125,6 +147,8 @@ class Settings:
     privacy: PrivacyCfg = field(default_factory=PrivacyCfg)
     enhancement: EnhancementCfg = field(default_factory=EnhancementCfg)
     camera: CameraCfg = field(default_factory=CameraCfg)
+    hardware: HardwareCfg = field(default_factory=HardwareCfg)
+    modules: ModulesCfg = field(default_factory=ModulesCfg)
 
     # --- rutas absolutas ------------------------------------------------
     def path(self, rel: str | Path) -> Path:

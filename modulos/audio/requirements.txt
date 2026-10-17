@@ -1,0 +1,2 @@
+# Ver requirements/modulos.txt (fuente única de las dependencias del módulo).
+-r ../../requirements/modulos.txt

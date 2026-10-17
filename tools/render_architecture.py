@@ -28,6 +28,7 @@ LAYERS = {
     "svc":   ("#f3ecfa", "#6b47a3"),
     "core":  ("#fbe9ea", "#a8323a"),
     "out":   ("#eef0f2", "#4b5563"),
+    "mod":   ("#e6f6f8", "#1d7a8a"),
 }
 
 
@@ -66,25 +67,26 @@ def main() -> None:
 
     # 1. Fuentes
     band(ax, 0.86, 0.09, "ENTRADA")
-    for i, (t, sub) in enumerate([("Webcam del navegador", "getUserMedia → JPEG"),
-                                  ("Cámara IP / USB", "RTSP · índice (servidor)"),
-                                  ("Imagen", "JPG / PNG"),
-                                  ("Vídeo pregrabado", "MP4 / AVI (RQNF22)")]):
-        box(ax, 0.04 + i * 0.24, 0.865, 0.21, 0.085, t, [sub], "src", 9.5)
+    for i, (t, sub, layer) in enumerate([
+            ("Webcam del navegador", "vídeo en vivo · JPEG 960 px", "src"),
+            ("Cámara IP / USB", "RTSP · índice (servidor)", "src"),
+            ("Micrófono del navegador", "módulo audio · PCM 16 kHz", "mod"),
+            ("Fotografía / cámara", "módulo imagen · JPG / PNG", "mod")]):
+        box(ax, 0.04 + i * 0.24, 0.865, 0.21, 0.085, t, [sub], layer, 9.5)
 
     # 2. Frontend
     band(ax, 0.745, 0.09, "FRONTEND")
     box(ax, 0.04, 0.75, 0.93, 0.09, "frontend/templates/index.html  ·  panel de supervisión (RQF08)",
-        ["Pestañas Imagen · Vídeo · Cámara en vivo · Clases   |   lienzo 960 px con cajas, "
-         "riesgo, alertas, estado del sistema, «SR en vivo»"], "front")
+        ["Pestañas Cámara en vivo · Audio · Imagen · Clases   |   cajas, riesgo, alertas "
+         "(vídeo + audio), «SR en vivo», botón «Detener sistema»"], "front")
     for i in range(4):
         arrow(ax, 0.145 + i * 0.24, 0.865, 0.145 + i * 0.24, 0.842)
 
     # 3. API
     band(ax, 0.6, 0.12, "API  (Flask)")
-    apis = [("analysis.py", ["/api/detect  /api/frame", "/api/video  /api/stream"]),
-            ("alerts.py", ["/api/alerts  /api/alertas", "ZIP · imagen de evidencia"]),
-            ("system.py", ["/  ·  /api/health", "/api/cameras"]),
+    apis = [("analysis.py", ["/api/frame  /api/stream", "solo vídeo en vivo"]),
+            ("alerts.py", ["/api/alerts  /api/alertas", "ZIP · fuentes extra (audio)"]),
+            ("system.py", ["/  ·  /api/health", "/api/system/stop"]),
             ("auth.py", ["PANEL_TOKEN (RQNF19)", "hmac.compare_digest"])]
     for i, (t, ls) in enumerate(apis):
         box(ax, 0.04 + i * 0.24, 0.6, 0.21, 0.115, t, ls, "api", 10)
@@ -92,16 +94,22 @@ def main() -> None:
 
     # 4. Servicios
     band(ax, 0.43, 0.13, "SERVICIOS")
-    box(ax, 0.04, 0.43, 0.42, 0.135, "services/inferencer.py — hilo CUDA único",
-        ["cola de trabajos · modo asíncrono en vivo (frame_id)",
-         "SR previa en imagen/vídeo · dibujo · evidencia"], "svc")
-    box(ax, 0.49, 0.43, 0.23, 0.135, "services/live_enhancer.py",
-        ["hilo propio · ranura «solo el último»", "Real-ESRGAN x4 ≈22 ms/cuadro",
-         "caché por frame_id"], "svc")
-    box(ax, 0.75, 0.43, 0.22, 0.135, "services/video_io.py",
-        ["H.264 con ffmpeg (+audio)", "RTSP con reconexión (RQNF13)"], "svc")
+    box(ax, 0.04, 0.43, 0.27, 0.135, "services/inferencer.py",
+        ["hilo CUDA único · cola", "asíncrono en vivo (frame_id)",
+         "dibujo · evidencia"], "svc", 9.5)
+    box(ax, 0.33, 0.43, 0.19, 0.135, "live_enhancer.py",
+        ["hilo propio · Real-ESRGAN x4", "FP16 · FP32 en GTX 16xx",
+         "caché por frame_id"], "svc", 9.5)
+    box(ax, 0.54, 0.43, 0.17, 0.135, "video_io · lifecycle",
+        ["RTSP con reconexión", "parada ordenada", "hardware.py (GTX 1650)"], "svc", 9.5)
+    box(ax, 0.73, 0.43, 0.24, 0.135, "modulos/  (aparte del vídeo)",
+        ["audio/: reglas final.py + MLP", "imagen/: YOLO11 + YOLO11-Pose",
+         "se cargan aislados"], "mod", 9.5)
     arrow(ax, 0.145, 0.6, 0.145, 0.567, "detect()")
-    arrow(ax, 0.23, 0.6, 0.55, 0.567, "submit() si sr=1")
+    arrow(ax, 0.23, 0.6, 0.42, 0.567, "submit() si sr=1")
+    arrow(ax, 0.983, 0.75, 0.983, 0.567)
+    ax.text(0.992, 0.66, "/api/audio · /api/imagen", rotation=90, ha="center",
+            va="center", fontsize=7.6, color=MUTED)
 
     # 5. Núcleo
     band(ax, 0.13, 0.28, "NÚCLEO")
@@ -119,18 +127,18 @@ def main() -> None:
         y = 0.27 if i < 3 else 0.15
         box(ax, x, y, 0.195, 0.095, t, ls, "core", 8.8)
     box(ax, 0.73, 0.28, 0.24, 0.13, "enhancement/",
-        ["SRVGGNetCompact (general-x4v3)", "RRDBNet (x4plus)", "PyTorch puro · FP16"], "core", 10)
+        ["SRVGGNetCompact (general-x4v3)", "vídeo en vivo", "PyTorch puro · FP16/FP32"], "core", 10)
     box(ax, 0.73, 0.13, 0.24, 0.13, "privacy/anonymizer.py",
         ["MediaPipe Face (corto + largo alcance)", "búsqueda por persona + cabeza",
          "pixelado (Ley N.º 29733)"], "core", 10)
     arrow(ax, 0.25, 0.43, 0.25, 0.412)
-    arrow(ax, 0.6, 0.43, 0.8, 0.412)
+    arrow(ax, 0.42, 0.43, 0.8, 0.412)
     arrow(ax, 0.695, 0.19, 0.73, 0.19)
 
     # 6. Salidas
     band(ax, 0.02, 0.09, "SALIDA")
-    box(ax, 0.04, 0.025, 0.45, 0.085, "outputs/alerts/<AAAA-MM-DD>/  +  alertas.jsonl",
-        ["evidencia anotada y anonimizada · registro append-only (RQNF16)"], "out", 9.5)
+    box(ax, 0.04, 0.025, 0.45, 0.085, "outputs/alerts/  +  outputs/audio_alerts/",
+        ["evidencia anotada y anonimizada · registros JSONL (RQNF16)"], "out", 9.5)
     box(ax, 0.52, 0.025, 0.45, 0.085, "configs/app.yaml  ·  models/",
         ["umbrales, cadencias, persistencia, modelos (RQNF21) · pesos verificados SHA-256"],
         "out", 9.5)

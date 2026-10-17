@@ -1,0 +1,16 @@
+# Dependencias de los módulos aparte (modulos/audio y modulos/imagen).
+# Se instalan en el MISMO entorno que el vídeo; no añaden otro PyTorch.
+#   pip install -r requirements/modulos.txt
+#
+# --- Audio (repo brigitteve/percepcion) ------------------------------------
+# El grupo fijó scikit-learn==1.9.1, que exige Python >= 3.11. Con Python 3.10
+# la última es 1.7.2, que carga su modelo (fall_classifier.joblib) sin cambios:
+# lo verifica modulos/audio/tests/test_audio_model.py (mismos pesos y salidas).
+librosa>=0.10.2,<0.12
+soundfile>=0.12,<0.14
+noisereduce>=3,<4
+scikit-learn>=1.7.2,<2
+joblib>=1.5,<2
+threadpoolctl>=3,<4
+# --- Imagen (repo AndreCastAst, rama s7-imagen) ----------------------------
+# Solo usa ultralytics, opencv y numpy, ya incluidos en base.txt.

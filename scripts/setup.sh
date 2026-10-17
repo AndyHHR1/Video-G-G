@@ -76,6 +76,9 @@ fi
 echo "== Dependencias"
 "$PY" -m pip install -r requirements/base.txt
 
+echo "== Módulos de audio e imagen"
+"$PY" -m pip install -r requirements/modulos.txt
+
 echo "== Modelos"
 "$PY" tools/download_models.py
 

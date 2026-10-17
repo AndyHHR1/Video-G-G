@@ -109,5 +109,47 @@ class AlertTest(unittest.TestCase):
             self.assertTrue(Path(alert["evidence"]).is_file())  # RQNF15
 
 
+class HardwareProfileTest(unittest.TestCase):
+    """Perfil para la GTX 1650 (4 GB, Turing sm_75)."""
+
+    def test_gtx1650_selects_low_vram(self):
+        from backend.hardware import choose_profile
+        gtx = {"name": "NVIDIA GeForce GTX 1650", "vram_gb": 3.81, "capability": "7.5"}
+        self.assertEqual(choose_profile("auto", gtx, 4.5), "baja_vram")
+        big = {"name": "NVIDIA GeForce RTX 5070 Laptop GPU", "vram_gb": 7.9,
+               "capability": "12.0"}
+        self.assertEqual(choose_profile("auto", big, 4.5), "normal")
+        self.assertEqual(choose_profile("auto", {}, 4.5), "normal")      # CPU
+        self.assertEqual(choose_profile("baja_vram", big, 4.5), "baja_vram")
+
+    def test_apply_profile_disables_fp16_and_shrinks_live_sr(self):
+        from backend.hardware import apply_profile
+        s = load_settings()
+        gtx = {"name": "NVIDIA GeForce GTX 1650", "vram_gb": 3.81,
+               "capability": "7.5", "arch_ok": True}
+        name, changes = apply_profile(s, gtx)
+        self.assertEqual(name, "baja_vram")
+        self.assertFalse(s.enhancement.half)
+        self.assertEqual(s.enhancement.live.input_max, 320)
+        self.assertEqual(s.inference.imgsz, 640)     # la detección no cambia
+        self.assertIn("enhancement.half", changes)
+
+
+class LifecycleTest(unittest.TestCase):
+    def test_shutdown_runs_hooks_once_in_reverse_order(self):
+        from backend.services.lifecycle import Lifecycle
+        calls = []
+        lc = Lifecycle()
+        lc.on_shutdown("primero", lambda: calls.append(1))
+        lc.on_shutdown("falla", lambda: 1 / 0)
+        lc.on_shutdown("último", lambda: calls.append(3))
+        stopped = []
+        lc.bind_server(lambda: stopped.append(True))
+        self.assertTrue(lc.shutdown("prueba"))
+        self.assertFalse(lc.shutdown("otra vez"))
+        self.assertEqual(calls, [3, 1])               # un fallo no corta la parada
+        self.assertTrue(lc.stopped and stopped)
+
+
 if __name__ == "__main__":
     unittest.main()

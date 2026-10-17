@@ -1,11 +1,7 @@
 """Superresolución x4 con Real-ESRGAN (mejora de calidad de vídeo).
 
-Dos modelos oficiales, elegibles en `configs/app.yaml`:
-
-| clave           | red              | uso por defecto          |
-|-----------------|------------------|--------------------------|
-| `general_x4v3`  | SRVGGNetCompact  | cámara en vivo y vídeo   |
-| `x4plus`        | RRDBNet (ESRGAN) | imagen fija              |
+Modelo oficial `general_x4v3` (realesr-general-x4v3, SRVGGNetCompact),
+pensado para vídeo: es el que mejora la cámara en vivo.
 
 Todo el pre y postproceso se hace en la GPU (conversión BGR->RGB, escalado
 final, paso a uint8) para que a la CPU solo vuelva la imagen ya del tamaño
@@ -19,7 +15,7 @@ import numpy as np
 import torch
 from torch.nn import functional as F
 
-from .archs import RRDBNet, SRVGGNetCompact
+from .archs import SRVGGNetCompact
 
 MODEL_ZOO: dict[str, dict] = {
     "general_x4v3": {
@@ -29,14 +25,6 @@ MODEL_ZOO: dict[str, dict] = {
         "sha256": "8dc7edb9ac80ccdc30c3a5dca6616509367f05fbc184ad95b731f05bece96292",
         "build": lambda: SRVGGNetCompact(num_feat=64, num_conv=32, upscale=4),
         "key": "params",
-    },
-    "x4plus": {
-        "file": "RealESRGAN_x4plus.pth",
-        "url": "https://github.com/xinntao/Real-ESRGAN/releases/download/"
-               "v0.1.0/RealESRGAN_x4plus.pth",
-        "sha256": "4fa0d38905f75ac06eb49a7951b426670021be3018265fd191d2125df9d682f1",
-        "build": lambda: RRDBNet(num_feat=64, num_block=23, num_grow_ch=32),
-        "key": "params_ema",
     },
 }
 SCALE = 4
@@ -96,7 +84,7 @@ class SuperResolver:
 
         * `input_max`: lado mayor que entra a la red (se reduce si es mayor).
         * `output_width`: si se da, la salida se escala a ese ancho (vivo).
-        * `output_max`: si se da, tope del lado mayor de la salida (uploads).
+        * `output_max`: si se da, tope del lado mayor de la salida.
         """
         h, w = frame.shape[:2]
         x = torch.from_numpy(np.ascontiguousarray(frame)).to(self.device)

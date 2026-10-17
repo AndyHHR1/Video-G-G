@@ -10,7 +10,9 @@ server:
   host: 127.0.0.1
   port: 5000
   debug: false
-  max_upload_mb: 512
+  # Tamaño máximo de una petición. Solo lo usan los módulos aparte (fotografía
+  # de Imagen y archivo de Audio): el vídeo es SOLO en vivo, no se suben vídeos.
+  max_upload_mb: 64
 
 # 'auto' usa la GPU si existe; también 'cpu', 'cuda' o un índice (0, 1...).
 device: auto
@@ -82,16 +84,40 @@ enhancement:
     input_max: 480           # lado mayor que entra a la red (~22 ms en RTX 5070)
     output_width: 960        # ancho que se envía al navegador (lienzo del panel)
     jpeg_quality: 80
-  uploads:
-    # Imagen fija: el modelo grande RealESRGAN_x4plus (RRDBNet, 16.7 M) prima
-    # calidad sobre velocidad. Se aplica ANTES de la detección.
-    image_model: x4plus
-    video_model: general_x4v3
-    input_max: 640
-    output_max: 2560
 
 # Fuente de la cámara del SERVIDOR para /api/stream (índice o URL RTSP/HTTP).
 # El modo "Cámara en vivo" del panel usa la webcam del navegador.
 camera:
   source: 0
   reconnect_attempts: 5
+
+# Perfil de hardware. Debe funcionar en una GTX 1650 (4 GB, Turing sm_75):
+# la build cu128 de PyTorch ya soporta sm_75; el perfil "baja_vram" solo
+# ajusta lo que en esa tarjeta cuesta demasiado. Ver backend/hardware.py.
+hardware:
+  profile: auto          # auto | normal | baja_vram
+  low_vram_gb: 4.5       # en auto, una GPU con <= 4.5 GB (o GTX 16xx) usa baja_vram
+  baja_vram:
+    enhancement.half: false            # GTX 16xx: FP16 da NaN/negro en varias redes
+    enhancement.live.input_max: 320    # ~2.2x menos trabajo para Real-ESRGAN en vivo
+
+# Módulos aparte. Viven en modulos/ y NO modifican el vídeo en vivo: si uno
+# falla al cargar, el panel de vídeo sigue funcionando igual.
+modules:
+  audio:
+    # Percepción acústica (repo brigitteve/percepcion): pisadas, carrera,
+    # impacto de caída, gritos/auxilio y clasificador ML de caídas.
+    enabled: true
+    options:
+      alerts_file: outputs/audio_alerts/alertas.jsonl
+      sensitivity: media     # alta | media | baja
+      ml_detector: true      # clasificador MLP del grupo (audio_fall_detector)
+      max_sessions: 4
+  imagen:
+    # Análisis de fotografía y fotogramas (repo AndreCastAst, rama s7-imagen):
+    # YOLO11 + YOLO11-Pose, calidad óptica y preprocesamiento adaptativo.
+    enabled: true
+    options:
+      detector: models/imagen/yolo11n.pt
+      pose: models/imagen/yolo11n-pose.pt
+      device: auto           # auto | cpu | cuda

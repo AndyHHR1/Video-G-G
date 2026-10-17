@@ -80,3 +80,26 @@ Ver README §5.4 y §7. Resultado: de ~2 fps (ONNX RRDB a 320 px) a ~29 fps con
   scripts.
 - mediapipe arrastraba `opencv-contrib-python` 4.11 → pin a 4.10.0.84, igual
   que `opencv-python`.
+
+## 5. Solo vídeo en vivo, módulos de audio e imagen, GTX 1650 y parada
+
+Pedido del cliente para la presentación del avance. **No se reentrenó ningún
+modelo.**
+
+| Pedido | Qué se hizo | Evidencia |
+|---|---|---|
+| Funcionar en una GTX 1650 | `backend/hardware.py`: perfil `baja_vram` automático (≤ 4.5 GB o GTX 16xx): Real-ESRGAN en FP32 (las GTX 16xx fallan con FP16 en varias redes) y entrada de 320 px. La build `cu128` ya trae `sm_75`. | Pico de 0.32 GB de VRAM con todo activo y la GPU limitada a 3.6 GB; `tests/test_units.py::HardwareProfileTest` |
+| Borrar todo lo de vídeo subido; solo vídeo en vivo | Fuera `/api/detect`, `/api/video`, la recodificación H.264, el SR previo de subidas y el modelo `RealESRGAN_x4plus`; fuera las pestañas Imagen y Vídeo. | `test_api_smoke.py::test_upload_routes_removed`, `test_index_has_module_tabs_and_stop_button` |
+| Integrar el audio de brigitteve/percepcion en carpeta aparte, sin su vídeo antiguo, con todas sus funciones y botón de audio | `modulos/audio/`: `acoustic_perception.py` (reglas de `final.py`), `audio_fall_detector/` (MLP original, mismo SHA-256), `audio_live.py` (sesiones, simulación, archivo), JS del navegador y panel. Pestaña **🎙 Audio**. El MLP, que el grupo dejó solo en scripts, corre en paralelo a las reglas (`CombinedAudioDetector`). | 39 pruebas de `modulos/` + 5 del worklet en Node |
+| Integrar el módulo de imagen de AndreCastAst (s7-imagen) reemplazando la imagen actual | `modulos/imagen/`: su `modulo_imagen/` completo, rutas de su `imagen_pruebas.py`, pruebas y scripts. Pestaña **🖼 Imagen**. Único cambio: carga perezosa de YOLO11 desde `models/imagen/`. Su `/api/imagen/analizar` (que reiniciaba el motor de vídeo) se sustituyó por `/api/imagen/caracteristicas`, de solo lectura. | `test_api_smoke.py::test_imagen_module_photo` |
+| Función interna para parar el proyecto | `backend/services/lifecycle.py` + `POST /api/system/stop` + botón «⏻ Detener sistema» + `python -m backend --stop` + Ctrl+C. El servidor pasó de `app.run` a `werkzeug.serving.make_server` para poder apagarse desde dentro. | `LifecycleTest`, `test_integracion_panel.py::test_parada_del_sistema_cierra_audio` |
+
+Desviaciones conscientes:
+
+- **scikit-learn 1.7.2** en lugar de 1.9.1 (exige Python ≥ 3.11). Las pruebas
+  del grupo comparan los hashes de los pesos y las predicciones de referencia:
+  coinciden.
+- El análisis de **archivo** del módulo de audio acepta solo audio (`.wav`,
+  `.mp3`, …): el pedido es que el sistema no reciba vídeos.
+- **RQNF22** (vídeo pregrabado) queda retirado por pedido del cliente; un vídeo
+  grabado se puede seguir reproduciendo como cámara RTSP por `/api/stream`.

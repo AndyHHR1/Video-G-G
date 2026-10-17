@@ -38,7 +38,14 @@ try:
         cap = torch.cuda.get_device_capability(0)
         vram = torch.cuda.get_device_properties(0).total_memory / 2**30
         line(True, f"GPU {name}  sm_{cap[0]}{cap[1]}  {vram:.1f} GB VRAM")
-        line(vram >= 6, "VRAM >= 6 GB (RQNF03)")
+        arch = f"sm_{cap[0]}{cap[1]}"
+        line(arch in torch.cuda.get_arch_list(),
+             f"esta build de PyTorch trae kernels para {arch}")
+        line(vram >= 3.9, "VRAM >= 4 GB (mínimo: GTX 1650)")
+        from backend.hardware import choose_profile, gpu_info
+        prof = choose_profile("auto", gpu_info(), 4.5)
+        print(f"       perfil de hardware automático: {prof}"
+              + ("  (FP32 en Real-ESRGAN, entrada 320 px)" if prof == "baja_vram" else ""))
 except Exception as exc:                                    # noqa: BLE001
     line(False, f"torch no importa: {exc}")
 
@@ -54,9 +61,18 @@ for mod, want in (("numpy", "1.26"), ("cv2", "4.10"), ("mediapipe", "0.10.21"),
     except Exception as exc:                                # noqa: BLE001
         line(False, f"{mod}: {exc}")
 
+print("Módulos aparte:")
+for mod in ("librosa", "soundfile", "noisereduce", "sklearn", "joblib", "threadpoolctl"):
+    try:
+        m = importlib.import_module(mod)
+        line(True, f"audio · {mod} {getattr(m, '__version__', '')}")
+    except Exception as exc:                                # noqa: BLE001
+        line(False, f"audio · {mod}: {exc}  (pip install -r requirements/modulos.txt)")
+
 try:
     import imageio_ffmpeg
-    line(Path(imageio_ffmpeg.get_ffmpeg_exe()).is_file(), "ffmpeg (imageio-ffmpeg)")
+    line(Path(imageio_ffmpeg.get_ffmpeg_exe()).is_file(),
+         "ffmpeg (imageio-ffmpeg; lo usa el módulo de audio para leer archivos)")
 except Exception as exc:                                    # noqa: BLE001
     line(False, f"ffmpeg: {exc}")
 

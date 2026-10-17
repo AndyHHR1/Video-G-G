@@ -1,0 +1,81 @@
+/* Panel «Audio en vivo» — módulo de percepción acústica (modulos/audio).
+   Estilos del repo del grupo de audio; usan las variables de color del panel. */
+  .apl-grid { display:grid; grid-template-columns:1fr 340px; gap:16px; }
+  .apl-chip { display:inline-flex; align-items:center; gap:6px;
+              font-size:12px; font-weight:600; padding:5px 12px; border-radius:20px; }
+  .chip-off   { background:#1c2030; color:#8b93a5; border:1px solid #2a3050; }
+  .chip-wait  { background:#1a2040; color:#6ea8fe; border:1px solid #3050a0;
+                animation:chip-pulse 1.4s ease-in-out infinite; }
+  .chip-ok    { background:#0d2318; color:#3fb85a; border:1px solid #1f6e3a; }
+  .chip-muted { background:#1a1a1a; color:#8b93a5; border:1px solid #333; }
+  .chip-error { background:#2a1010; color:#e03c3c; border:1px solid #6e1f1f; }
+  .chip-alto  { background:#380e0e; color:#ff4d4d; border:1px solid #ff4d4d;
+                box-shadow:0 0 12px rgba(255,77,77,0.4); animation:chip-pulse 0.8s ease-in-out infinite; }
+  .chip-medio { background:#2e1b07; color:#f2a83c; border:1px solid #f2a83c; }
+  .chip-caminando { background:#0d2318; color:#3fb85a; border:1px solid #1f6e3a; }
+  .chip-ruido_normal { background:#111a28; color:#6ea8fe; border:1px solid #284470; }
+  @keyframes chip-pulse { 0%,100%{opacity:1} 50%{opacity:.6} }
+
+  .apl-vu-wrap { background:#0d1018; border-radius:8px; padding:10px 12px; border:1px solid var(--line); margin-bottom:12px; }
+  #apl-vu { width:100%; height:28px; border-radius:4px; display:block; }
+  .apl-levels { display:flex; justify-content:space-between; font-size:11px;
+                color:var(--muted); margin-top:5px; }
+  .apl-levels b { color:var(--text); }
+
+  .apl-flash { display:none; position:fixed; top:0; left:0; right:0; z-index:9999;
+               background:rgba(224,60,60,.92); color:#fff; font-weight:700; font-size:15px;
+               padding:14px 24px; align-items:center; gap:14px; justify-content:center;
+               border-bottom:2px solid #ff6060; box-shadow:0 4px 24px rgba(224,60,60,.5); }
+  .apl-flash-anim { animation:flash-in .2s ease, flash-out .5s ease 4s forwards; }
+  @keyframes flash-in  { from{transform:translateY(-100%)} to{transform:translateY(0)} }
+  @keyframes flash-out { from{opacity:1} to{opacity:0;transform:translateY(-100%)} }
+
+  .apl-log  { max-height:420px; overflow-y:auto; }
+  .apl-item { display:flex; gap:10px; padding:12px; border-bottom:1px solid #1d212a;
+              animation:item-in .25s ease; }
+  @keyframes item-in { from{opacity:0;transform:translateX(-8px)} to{opacity:1;transform:none} }
+  .apl-item:first-child { border-top-left-radius:8px; border-top-right-radius:8px; }
+  .apl-item:last-child  { border-bottom:0; }
+  .apl-alto  { border-left:3px solid var(--alto); background:rgba(224,60,60,0.04); }
+  .apl-medio { border-left:3px solid var(--medio); background:rgba(242,168,60,0.04); }
+  .apl-bajo  { border-left:3px solid var(--bajo); }
+  .apl-icon  { font-size:20px; flex-shrink:0; padding-top:1px; }
+  .apl-body  { flex:1; min-width:0; }
+  .apl-title { font-size:13px; font-weight:600; }
+  .apl-meta  { font-size:11px; color:var(--muted); margin-top:3px; line-height:1.5; }
+  .apl-desc  { font-size:11.5px; color:#d0d4e0; margin-top:3px; }
+  .apl-ref   { font-size:10.5px; color:#6b7280; margin-top:2px; }
+  .apl-badge { font-size:10px; padding:2px 8px; border-radius:9px; margin-left:6px;
+               font-weight:700; text-transform:uppercase; letter-spacing:0.04em; }
+  .apl-badge-alto  { background:rgba(224,60,60,.25); color:#ff5555; border:1px solid rgba(224,60,60,0.3); }
+  .apl-badge-medio { background:rgba(242,168,60,.25); color:#f2a83c; border:1px solid rgba(242,168,60,0.3); }
+  .apl-badge-bajo  { background:rgba(63,184,90,.25); color:#3fb85a; border:1px solid rgba(63,184,90,0.3); }
+  button.apl-del { background:transparent !important; border:0 !important; color:#788296 !important;
+                   cursor:pointer; font-size:16px; padding:2px 6px !important; margin:0;
+                   line-height:1; border-radius:4px; transition:all .15s; }
+  button.apl-del:hover { color:#ff5555 !important; background:rgba(224,60,60,.18) !important; }
+  .apl-placeholder { color:#39404f; font-size:13px; padding:40px 20px; text-align:center; }
+
+  .apl-metrics-grid { display:grid; grid-template-columns:repeat(4, 1fr); gap:8px; margin:12px 0 6px; }
+  @media (max-width: 768px) { .apl-metrics-grid { grid-template-columns:repeat(2, 1fr); } }
+  .apl-metric-card { background:#0a0e16; border:1px solid var(--line); border-radius:8px; padding:8px 6px; text-align:center; }
+  .apl-metric-title { font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:0.04em; white-space:nowrap; }
+  .apl-metric-val   { font-size:15px; font-weight:700; color:#fff; margin-top:4px; }
+
+  .apl-stats { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:14px; }
+  .apl-stat  { background:#111620; border:1px solid var(--line); border-radius:8px;
+               padding:10px 12px; }
+  .apl-stat .apl-stat-label { font-size:10.5px; color:var(--muted); text-transform:uppercase;
+                              letter-spacing:.06em; }
+  .apl-stat .apl-stat-val   { font-size:18px; font-weight:700; color:var(--text); margin-top:3px; }
+
+  .apl-timeline-box { margin-top:12px; background:#0b0e14; border:1px solid var(--line); border-radius:8px; padding:10px; max-height:260px; overflow-y:auto; }
+  .apl-tl-item { display:flex; justify-content:space-between; align-items:center; padding:7px 10px; border-bottom:1px solid #1a202c; font-size:12px; }
+  .apl-tl-item:last-child { border-bottom:0; }
+  .apl-tl-time { font-family:monospace; color:var(--muted); font-size:11px; margin-right:8px; }
+
+  /* tab badge */
+  .tab-badge { background:var(--alto); color:#fff; font-size:10px; font-weight:700;
+               padding:1px 6px; border-radius:10px; margin-left:6px;
+               display:none; vertical-align:middle; }
+  @media (max-width: 900px) { .apl-grid { grid-template-columns:1fr; } }

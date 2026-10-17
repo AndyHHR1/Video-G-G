@@ -7,8 +7,12 @@
 Modelos:
   * models/detector/escaleras_s7_v4.pt  "Modelo S7 v4" (release del proyecto)
   * models/coco/yolov8s.pt              YOLOv8s COCO (Ultralytics)
-  * models/sr/realesr-general-x4v3.pth  Real-ESRGAN compacto (vivo / vídeo)
-  * models/sr/RealESRGAN_x4plus.pth     Real-ESRGAN RRDB (imagen fija)
+  * models/sr/realesr-general-x4v3.pth  Real-ESRGAN compacto (vídeo en vivo)
+  * models/imagen/yolo11n.pt            YOLO11n (módulo Imagen)
+  * models/imagen/yolo11n-pose.pt       YOLO11n-Pose (módulo Imagen)
+  * modulos/audio/.../fall_classifier.joblib  MLP acústico (módulo Audio)
+
+Ninguno se reentrena: son los modelos entregados o preentrenados públicos.
 
 Solo usa la librería estándar, así que funciona antes de instalar nada.
 El detector viene versionado en el repositorio; si falta, se extrae del
@@ -50,11 +54,25 @@ MODELS = [
         "desc": "Real-ESRGAN general x4 v3 (vídeo en vivo)",
     },
     {
-        "path": "models/sr/RealESRGAN_x4plus.pth",
-        "sha256": "4fa0d38905f75ac06eb49a7951b426670021be3018265fd191d2125df9d682f1",
-        "url": "https://github.com/xinntao/Real-ESRGAN/releases/download/"
-               "v0.1.0/RealESRGAN_x4plus.pth",
-        "desc": "Real-ESRGAN x4plus (imagen fija)",
+        "path": "models/imagen/yolo11n.pt",
+        "sha256": "0ebbc80d4a7680d14987a577cd21342b65ecfd94632bd9a8da63ae6417644ee1",
+        "url": "https://github.com/ultralytics/assets/releases/download/"
+               "v8.3.0/yolo11n.pt",
+        "desc": "YOLO11n COCO (módulo Imagen: personas y celulares)",
+    },
+    {
+        "path": "models/imagen/yolo11n-pose.pt",
+        "sha256": "869e83fcdffdc7371fa4e34cd8e51c838cc729571d1635e5141e3075e9319dc0",
+        "url": "https://github.com/ultralytics/assets/releases/download/"
+               "v8.3.0/yolo11n-pose.pt",
+        "desc": "YOLO11n-Pose (módulo Imagen: articulaciones)",
+    },
+    {
+        "path": "modulos/audio/audio_fall_detector/models/fall_classifier.joblib",
+        "sha256": "68527b88f75142693c56ee798f981611febb5d25fd46316e6c799aca7e2eb9da",
+        "url": "https://github.com/brigitteve/percepcion/raw/main/"
+               "audio_fall_detector/models/fall_classifier.joblib",
+        "desc": "Clasificador acústico de caídas (módulo Audio, versionado)",
     },
 ]
 

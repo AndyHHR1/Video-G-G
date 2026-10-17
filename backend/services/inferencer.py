@@ -46,12 +46,12 @@ class Inferencer:
         self.conf = settings.inference.conf
         self.device = None
         self.engine: RiskEngine | None = None
-        self.enhancers: dict[str, object] = {}   # SR para uploads, por modelo
         self.load_error: Exception | None = None
         self._q: queue.Queue = queue.Queue()
         self._last: tuple | None = None
         self._lock = threading.Lock()
         self._ready = threading.Event()
+        self._stopped = threading.Event()
         self._thread = threading.Thread(target=self._run, name="inferencer",
                                         daemon=True)
         self._thread.start()
@@ -64,15 +64,6 @@ class Inferencer:
         s = self.settings
         self.device = resolve_device(s.device)
         self.engine = RiskEngine(s, conf=self.conf)
-        if sr_enabled(s):
-            from ..enhancement.super_resolution import SuperResolver
-            up = s.enhancement.uploads
-            for name in {up.image_model, up.video_model}:
-                try:
-                    self.enhancers[name] = SuperResolver(
-                        name, s.sr_dir, self.device, half=s.enhancement.half)
-                except FileNotFoundError as exc:
-                    print(f"  [aviso] SR '{name}' desactivado: {exc}", flush=True)
         # Calentamiento: la primera inferencia paga la inicialización de CUDA
         # y de MediaPipe (varios segundos); mejor aquí que en el primer
         # fotograma del usuario.
@@ -93,6 +84,7 @@ class Inferencer:
         while True:
             job = self._q.get()
             if job is None:
+                self._release()
                 return
             frame, opts, out, _droppable = job
             try:
@@ -111,17 +103,11 @@ class Inferencer:
                 out["done"].set()
 
     def _process(self, frame: np.ndarray, conf: float, draw: bool = True,
-                 force: bool = False, allow_alerts: bool = True,
-                 sr_model: str | None = None, fid=None):
+                 force: bool = False, allow_alerts: bool = True, fid=None):
         if conf != self.conf:
             self.conf = self.engine.conf = conf
         t0 = time.perf_counter()
         self.engine.camera_connected = True
-        # Mejora previa a la detección (imagen o vídeo subidos).
-        if sr_model and sr_model in self.enhancers:
-            up = self.settings.enhancement.uploads
-            frame = self.enhancers[sr_model].enhance(
-                frame, input_max=up.input_max, output_max=up.output_max)
         result = self.engine.step(frame, force=force, allow_alerts=allow_alerts)
         result["frame_id"] = fid
         t_predict = (time.perf_counter() - t0) * 1000
@@ -148,15 +134,16 @@ class Inferencer:
     # API pública (llamada desde los hilos de Flask)
     # ------------------------------------------------------------------ #
     def detect(self, frame: np.ndarray, conf: float, *, draw: bool = True,
-               force: bool = False, allow_alerts: bool = True,
-               sr_model: str | None = None, fid=None,
+               force: bool = False, allow_alerts: bool = True, fid=None,
                wait: bool = True):
         """Encola un fotograma. Con `wait=False` devuelve el último resultado
         disponible (o `None`) sin esperar al de este fotograma."""
+        if self.stopped:
+            raise RuntimeError("el sistema se está deteniendo")
         self._trim()
         out = {"done": threading.Event()}
         opts = dict(conf=conf, draw=draw, force=force,
-                    allow_alerts=allow_alerts, sr_model=sr_model, fid=fid)
+                    allow_alerts=allow_alerts, fid=fid)
         self._q.put((frame, opts, out, not wait))
         if not wait:
             with self._lock:
@@ -169,7 +156,7 @@ class Inferencer:
     def _trim(self) -> None:
         """Si el motor no llega al ritmo de la cámara, descarta fotogramas en
         vivo atrasados. Solo se descartan trabajos asíncronos: uno síncrono
-        (imagen o vídeo subido) tiene una petición esperando su resultado."""
+        (modo overlay o cámara del servidor) tiene una petición esperando."""
         if self._q.qsize() <= self.MAX_QUEUE:
             return
         pending = []
@@ -187,13 +174,61 @@ class Inferencer:
 
     def reset(self) -> None:
         """Limpia las caches del motor desde su propio hilo."""
+        if self.stopped:
+            return
         out = {"done": threading.Event()}
         self._q.put((None, {"reset": True}, out, False))
         out["done"].wait()
+
+    def last_result(self) -> tuple | None:
+        """Último (fotograma, resultado) analizado en vivo, solo lectura.
+        Lo usa el módulo Imagen para su vector de características."""
+        with self._lock:
+            if not self._last:
+                return None
+            return self._last[0], self._last[1]
 
     def clear_last(self) -> None:
         with self._lock:
             self._last = None
 
-    def shutdown(self) -> None:
+    # ------------------------------------------------------------------ #
+    @property
+    def stopped(self) -> bool:
+        return self._stopped.is_set()
+
+    def shutdown(self, timeout: float = 10.0) -> None:
+        """Detiene el hilo trabajador y libera los modelos de la GPU.
+
+        Las peticiones en vivo que estuvieran en cola se descartan; la que se
+        esté procesando termina antes de que el hilo salga."""
+        if self._stopped.is_set():
+            return
+        self._stopped.set()
+        pending = []
+        while True:
+            try:
+                pending.append(self._q.get_nowait())
+            except queue.Empty:
+                break
+        for job in pending:
+            if job is not None:
+                job[2]["error"] = RuntimeError("sistema detenido")
+                job[2]["done"].set()
         self._q.put(None)
+        self._thread.join(timeout)
+        with self._lock:
+            self._last = None
+
+    def _release(self) -> None:
+        """Suelta los modelos desde su propio hilo (contexto CUDA)."""
+        self.engine = None
+        try:
+            import gc
+
+            import torch
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:                                   # noqa: BLE001
+            pass

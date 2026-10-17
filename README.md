@@ -7,6 +7,18 @@ el celular y objetos abandonados en los escalones**. Incluye un panel web con la
 cámara en vivo y una opción de **mejora de calidad de vídeo (Real-ESRGAN x4)**
 que funciona de forma fluida en tiempo real.
 
+El vídeo trabaja **solo en vivo** (no se suben vídeos ni imágenes al motor de
+vídeo). Junto a él hay dos **módulos aparte**, integrados desde los repositorios
+de los otros grupos sin modificar el vídeo:
+
+- **`modulos/audio/`** — percepción acústica: pisadas, carrera, impacto de caída,
+  gritos / pedido de auxilio y clasificador ML de caídas (pestaña **🎙 Audio**).
+- **`modulos/imagen/`** — análisis de fotografías y fotogramas con YOLO11 +
+  YOLO11-Pose, calidad óptica y preprocesamiento adaptativo (pestaña **🖼 Imagen**).
+
+Funciona en una **GTX 1650 (4 GB)**: el perfil `baja_vram` se activa solo (§4.5)
+y el panel tiene un botón **«Detener sistema»** que apaga todo de forma ordenada.
+
 > Universidad Privada Antenor Orrego · Curso de Percepción Computacional · 2026
 > Rama `expo` · Modelo **S7 v4** (release `v1.2.0-escaleras-v4`, definitivo, no se reentrena)
 
@@ -45,18 +57,21 @@ que funciona de forma fluida en tiempo real.
 | Detectar **no uso del pasamanos** | Señal `sin_pasamanos`: ninguna muñeca a la altura de la barandilla y brazo separado del tronco. Riesgo MEDIO. |
 | Detectar **anomalías en la escalera** (objetos, estorbos) | YOLOv8s COCO: mochila, bolso, maleta, botella, libro, paraguas → `obstaculo_escalon` (ALTO); mobiliario como contexto. |
 | Opción para ver la imagen en vivo **con mejora de calidad** | Casilla **«Mejora de calidad (Real-ESRGAN x4)»**: Real-ESRGAN x4 (`realesr-general-x4v3`) en un hilo propio, ~22 ms por cuadro → el vídeo mejorado se ve fluido (~29 fps medidos). |
-| La interfaz debe ser la misma | Mismo plano y mismas pestañas. En el frontend solo se actualizó el texto de la casilla de mejora de calidad; todo lo demás se hizo en el backend. |
+| Solo vídeo en vivo | Se eliminaron las pestañas y rutas de imagen y vídeo **subidos** (`/api/detect`, `/api/video`) y el modelo de SR que solo usaban ellas. |
+| Funcionar en una **GTX 1650** | Perfil `baja_vram` automático: Real-ESRGAN en FP32 y entrada de 320 px. Pico medido con todo activo: **0.32 GB de VRAM** (§4.5). |
+| Integrar el **audio** del grupo de audio | `modulos/audio/` + pestaña **🎙 Audio**: todas sus funciones activas (§4.6). |
+| Integrar el **módulo de imagen** | `modulos/imagen/` + pestaña **🖼 Imagen**, que reemplaza a la antigua pestaña Imagen (§4.6). |
+| Función interna para **parar el proyecto** | `Lifecycle.shutdown()`: botón «Detener sistema», `python -m backend --stop` o Ctrl+C (§3). |
 
 Además: alertas con evidencia fotográfica **anonimizada**, registro auditable,
-autenticación del panel, estado operativo visible y procesamiento de imágenes y
-vídeos pregrabados.
+autenticación del panel y estado operativo visible.
 
 ---
 
 ## 2. Instalación
 
 Requisitos: **Python 3.10 – 3.12**, Linux / WSL2 / macOS / Windows. GPU NVIDIA
-opcional (recomendada, ≥ 6 GB VRAM). Todo se instala **dentro de un entorno
+opcional (recomendada; mínimo probado: perfil de **GTX 1650, 4 GB**). Todo se instala **dentro de un entorno
 virtual**: no se ensucia el sistema.
 
 ### 2.1 Instalación automática (Linux / WSL2)
@@ -90,6 +105,7 @@ pip install --upgrade pip
 pip install --ignore-installed "flatbuffers>=2.0"   # ver nota 1
 pip install -r requirements/torch-cu128.txt         # ver nota 2
 pip install -r requirements/base.txt
+pip install -r requirements/modulos.txt             # audio e imagen
 python tools/download_models.py
 python tools/check_env.py
 ```
@@ -101,7 +117,9 @@ python tools/check_env.py
 > **Nota 2 – PyTorch.** El PyTorch de Lambda Stack no trae kernels para GPUs
 > **Blackwell (RTX 50xx, `sm_120`)**: `torch.cuda.is_available()` devuelve
 > `False`. Por eso se instala `torch 2.11.0+cu128` dentro del venv, que tiene
-> prioridad sobre el del sistema. En GPUs anteriores también funciona.
+> prioridad sobre el del sistema. Esa build trae kernels desde **`sm_75`**
+> (Turing), así que también sirve tal cual para una **GTX 1650** (driver NVIDIA
+> ≥ 570, el mínimo de CUDA 12.8).
 >
 > **Nota 3 – TensorFlow del sistema.** mediapipe importa el TensorFlow de Lambda
 > Stack y éste carga su propia NCCL; si eso ocurre antes que torch, torch falla
@@ -120,6 +138,7 @@ pip install --upgrade pip
 pip install -r requirements/torch-cu128.txt     # GPU NVIDIA
 # pip install -r requirements/torch-cpu.txt    # sin GPU (o macOS)
 pip install -r requirements/base.txt
+pip install -r requirements/modulos.txt        # audio e imagen
 python tools/download_models.py
 ```
 
@@ -131,6 +150,7 @@ py -3.11 -m venv .venv
 python -m pip install --upgrade pip
 pip install -r requirements\torch-cu128.txt     # o requirements\torch-cpu.txt
 pip install -r requirements\base.txt
+pip install -r requirements\modulos.txt
 python tools\download_models.py
 ```
 
@@ -140,7 +160,8 @@ python tools\download_models.py
 python tools/check_env.py
 ```
 
-Muestra versiones, GPU, VRAM y el estado (hash) de cada modelo.
+Muestra versiones, GPU, VRAM, si PyTorch trae kernels para esa GPU, el perfil
+de hardware que se usará, las dependencias de los módulos y el hash de cada modelo.
 
 ---
 
@@ -156,6 +177,9 @@ scripts/run.sh                       # equivalente a: python -m backend
 | `--host 0.0.0.0 --port 5000` | Escuchar en la red local (por ejemplo, para verlo desde el celular) |
 | `--device cpu` / `--device 0` | Forzar CPU o una GPU concreta (`auto` por defecto) |
 | `--sr` / `--no-sr` | Forzar o apagar la mejora Real-ESRGAN (`auto`: activa si hay GPU) |
+| `--profile baja_vram` | Forzar el perfil de GTX 1650 (`auto` lo elige solo) |
+| `--no-audio` / `--no-imagen` | Arrancar sin uno de los módulos aparte |
+| `--stop` | Detener un servidor que ya está corriendo y salir |
 | `--conf 0.3` | Umbral por defecto del detector |
 | `--set clave.sub=valor` | Cambiar cualquier valor de `configs/app.yaml` sin editarlo |
 | `--config otro.yaml` | Usar otra configuración (por ejemplo, otra escalera) |
@@ -171,10 +195,24 @@ PANEL_TOKEN="un-secreto-largo" scripts/run.sh --host 0.0.0.0
 
 **Pestañas del panel:**
 
-- **Imagen:** analiza una foto (con mejora `RealESRGAN_x4plus` previa si hay GPU). No genera alertas: una foto no es un suceso en el tiempo.
-- **Vídeo:** procesa un vídeo completo y lo devuelve anotado en H.264 con su audio. Sí genera alertas (RQNF22).
-- **Cámara en vivo:** webcam del navegador. La casilla **«Mejora de calidad (Real-ESRGAN x4)»** activa la mejora en tiempo real (~29 fps).
+- **Cámara en vivo:** webcam del navegador. La casilla **«Mejora de calidad (Real-ESRGAN x4)»** activa la mejora en tiempo real (~29 fps). Sus alertas incluyen también las acústicas (marcadas «audio»).
+- **🎙 Audio** (módulo `modulos/audio`): micrófono en vivo con vúmetro y métricas (pisadas/s, factor de cresta, F0, pico RMS), sensibilidad alta/media/baja, pitido y notificaciones, demostración con la sesión simulada de `final.py` y análisis de un archivo **de audio**. Puede funcionar a la vez que la cámara.
+- **🖼 Imagen** (módulo `modulos/imagen`): fotografía o cámara; calidad óptica, preprocesamiento (adaptativo / original / CLAHE / gamma), personas y celulares (YOLO11n), articulaciones (YOLO11n-Pose) y el JSON completo. «Características del vídeo en vivo» lee el último fotograma del vídeo sin alterarlo.
 - **Clases:** leyenda de clases y su relación con los requisitos.
+
+**Detener el sistema** (función interna de parada, `backend/services/lifecycle.py`):
+
+| Cómo | Qué hace |
+|---|---|
+| Botón **«⏻ Detener sistema»** del panel | Cierra en el navegador cámara, micrófono y cámara de Imagen; luego `POST /api/system/stop` |
+| `python -m backend --stop` | Pide la parada a un servidor en marcha (usa `PANEL_TOKEN` si está definido) |
+| Ctrl+C / `SIGTERM` | Misma parada ordenada desde la consola |
+
+En todos los casos se deja de aceptar trabajo nuevo (las rutas `/api/*` responden
+503), se cierran las sesiones de audio, se liberan los modelos de imagen, se
+detienen la mejora en vivo y el hilo de inferencia (vaciando la memoria de la
+GPU) y, por último, el servidor HTTP. Sin `PANEL_TOKEN`, la parada por HTTP solo
+se acepta desde el propio equipo.
 
 > `getUserMedia` (webcam) solo funciona en un origen seguro: abrir en
 > `http://localhost:5000` o servir por HTTPS. Sin HTTPS no hay cifrado: usar
@@ -195,15 +233,20 @@ flowchart TB
         UI["index.html · login.html<br/>panel de supervisión"]
     end
     subgraph API["backend/api/  — HTTP (Flask)"]
-        AN["analysis.py<br/>/api/detect · /api/frame<br/>/api/video · /api/stream"]
+        AN["analysis.py<br/>/api/frame · /api/stream<br/>(solo en vivo)"]
         AL["alerts.py<br/>/api/alerts · ZIP · borrar"]
-        SY["system.py<br/>/ · /api/health"]
+        SY["system.py<br/>/ · /api/health · /api/system/stop"]
         AU["auth.py<br/>PANEL_TOKEN"]
     end
     subgraph SV["backend/services/  — hilos de trabajo"]
         INF["inferencer.py<br/>hilo CUDA único + cola"]
         LE["live_enhancer.py<br/>hilo SR en vivo"]
-        VIO["video_io.py<br/>H.264 · RTSP"]
+        VIO["video_io.py<br/>cámara · RTSP"]
+        LC["lifecycle.py<br/>parada ordenada"]
+    end
+    subgraph MODS["modulos/  — aparte del vídeo"]
+        AUD["audio/<br/>/api/audio/*"]
+        IMG["imagen/<br/>/api/imagen/*"]
     end
     subgraph CORE["núcleo"]
         ENG["perception/engine.py<br/>RiskEngine.step()"]
@@ -220,6 +263,9 @@ flowchart TB
     OUT[("outputs/alerts/")]
 
     UI -- "HTTP / JSON / JPEG" --> API
+    UI -- "PCM 16 kHz · fotos" --> MODS
+    AUD -. "fuente de alertas" .-> AL
+    IMG -. "lee el último resultado" .-> INF
     AN --> INF & LE & VIO
     INF --> ENG & SR & RND
     LE --> SR
@@ -234,7 +280,9 @@ flowchart TB
 |---|---|---|
 | Presentación | `frontend/` | Panel web (HTML + JS). No contiene lógica de visión. |
 | API | `backend/api/` | Traducir HTTP ↔ llamadas a servicios. Validar entradas. Autenticación. |
-| Servicios | `backend/services/` | Concurrencia: hilo de inferencia, hilo de SR en vivo, E/S de vídeo. |
+| Servicios | `backend/services/` | Concurrencia: hilo de inferencia, hilo de SR en vivo, cámara, ciclo de vida (parada). |
+| Hardware | `backend/hardware.py` | Detecta la GPU y aplica el perfil `baja_vram` (GTX 1650). |
+| Módulos aparte | `modulos/audio/`, `modulos/imagen/` | Audio e imagen de los otros grupos. Se cargan aislados: si fallan, el vídeo sigue. |
 | Percepción | `backend/perception/` | Motor de riesgo: detectores, pose, seguimiento, persistencia, alertas. |
 | Mejora | `backend/enhancement/` | Superresolución Real-ESRGAN (arquitecturas en PyTorch puro). |
 | Privacidad | `backend/privacy/` | Anonimización de rostros antes de escribir cualquier imagen. |
@@ -290,9 +338,70 @@ fotograma ─► 1 personas (YOLOv8s COCO) ────────────�
 | Respuesta de `/api/frame` (asíncrono) | p50 4–5 ms |
 | Cámara en vivo con «SR en vivo» | **~29 fps**, imagen mejorada en cada respuesta |
 | Real-ESRGAN `general-x4v3`, 480→1920 px, FP16 | 22 ms (FP32: 50 ms) |
-| Real-ESRGAN `x4plus`, 640→2560 px, FP16 | 0.78 s (solo imagen fija) |
+| Perfil GTX 1650 (FP32, 320 px), todo activo, GPU limitada a 3.6 GB | Real-ESRGAN 19 ms/cuadro · pico **0.32 GB** de VRAM |
+| Módulo de audio (detector por reglas + MLP), bloque de 500 ms | ~165 ms de CPU por bloque |
 | SR anterior (ONNX + onnx2torch, 320 px) | ~460 ms → ~2 fps |
 | Anonimización de una evidencia | ~15 ms (solo en fotogramas con alerta) |
+
+### 4.5 GTX 1650 (4 GB): perfil `baja_vram`
+
+La GTX 1650 es Turing (`sm_75`) con 4 GB y sin Tensor Cores. La build
+`torch 2.11.0+cu128` del proyecto ya trae kernels para `sm_75`, así que no hace
+falta otra instalación. `backend/hardware.py` detecta la GPU al arrancar y, si
+tiene ≤ 4.5 GB o es una GTX 16xx, aplica el perfil `baja_vram`
+(`configs/app.yaml → hardware`):
+
+| Ajuste | Normal | `baja_vram` | Por qué |
+|---|---|---|---|
+| `enhancement.half` (FP16 en Real-ESRGAN) | sí | **no** | Las GTX 16xx tienen fallos conocidos con media precisión (NaN / imagen negra) |
+| `enhancement.live.input_max` | 480 px | **320 px** | ~2.2× menos trabajo de SR: deja GPU libre para la detección |
+| Detección (S7 v4, 640 px) | igual | igual | El modelo se entrenó a 640 px y **no se reentrena** |
+| Modelos de imagen (YOLO11) | carga en el primer uso | igual | No ocupan VRAM hasta que se usa la pestaña Imagen |
+
+Además se quitó el modelo grande `RealESRGAN_x4plus` (16.7 M parámetros), que
+solo servía a las imágenes/vídeos subidos. Medido en esta máquina con el perfil
+forzado y la GPU limitada a 3.6 GB (`torch.cuda.set_per_process_memory_fraction`):
+vídeo en vivo + mejora + módulo Imagen = **0.32 GB** de pico. El perfil se puede
+forzar con `--profile baja_vram` o desactivar con `--profile normal`.
+
+### 4.6 Módulos aparte: audio e imagen
+
+Viven en `modulos/` y no importan nada del vídeo. Cada uno expone
+`install(app, settings, runtime, options)`; `backend/app.py` los carga al final
+dentro de un `try`: si uno falla (por ejemplo, faltan sus dependencias) el panel
+lo marca «no disponible» y el vídeo sigue igual.
+
+**Audio** — de [brigitteve/percepcion](https://github.com/brigitteve/percepcion).
+Se trajo solo la parte acústica; **su versión antigua de vídeo no se migró**.
+
+| Función | Archivo |
+|---|---|
+| Captura del micrófono en el navegador: AudioWorklet, mono 16 kHz, bloques de 500 ms | `static/audio-worklet.js`, `static/audio-live.js` |
+| Panel: vúmetro, métricas en vivo, sensibilidad, pitido, notificaciones, alertas | `static/audio-panel.js`, `templates/audio/panel.html` |
+| Detector por reglas de `final.py`: pisadas/cadencia (caminando / corriendo), impacto (pico RMS + factor de cresta), grito / auxilio (F0 con pYIN) | `acoustic_perception.py` |
+| Clasificador ML de caídas: disparador RMS, MLP calibrado de 6 clases, vetos, evaluación de los 7 s posteriores y fusión | `audio_fall_detector/` (modelo `fall_classifier.joblib`, sin reentrenar) |
+| Sesiones, cola acotada, simulación y análisis de archivo de audio | `audio_live.py` (`/api/audio/*`) |
+
+Ambos detectores analizan el mismo PCM en paralelo (`CombinedAudioDetector`).
+Las alertas acústicas se guardan en `outputs/audio_alerts/alertas.jsonl` (solo
+metadatos, nunca audio) y aparecen en el panel de alertas, el ZIP y el borrado.
+El análisis de archivo acepta **solo audio**: el sistema no recibe vídeos.
+
+**Imagen** — de [AndreCastAst/Repo-video-imagen-audio](https://github.com/AndreCastAst/Repo-video-imagen-audio/tree/s7-imagen)
+(rama `s7-imagen`). **Reemplaza la antigua pestaña Imagen**, que solo pasaba una
+foto por el motor de vídeo.
+
+| Función | Archivo |
+|---|---|
+| Calidad óptica (luminosidad, contraste, nitidez, sombras, ruido) | `modulo_imagen/calidad.py` |
+| Preprocesamiento adaptativo / CLAHE / gamma | `modulo_imagen/preprocesamiento.py` |
+| Personas y celulares (YOLO11n), pose e inclinación del torso (YOLO11n-Pose) | `modulo_imagen/detector.py`, `pose.py` |
+| Análisis por fotograma: asociación pose-persona, poses huérfanas, celular-mano, advertencias | `modulo_imagen/analisis_tiempo_real.py` |
+| Vector de características `imagen-0.1.0` | `modulo_imagen/features.py` (`/api/imagen/caracteristicas`) |
+| Clips y recuperación en ROI (scripts del grupo) | `modulo_imagen/analizador_clip.py`, `recuperacion_roi.py`, `scripts/` |
+
+El único cambio a su código es que los modelos se cargan en el primer uso desde
+`models/imagen/` (`modulo_imagen/modelos.py`) en lugar de al importar.
 
 ---
 
@@ -367,10 +476,12 @@ pesos oficiales:
 
 | Modelo | Arquitectura | Parámetros | Uso |
 |---|---|---|---|
-| `realesr-general-x4v3` | **SRVGGNetCompact**: 32 convoluciones 3×3 + PReLU a la resolución de entrada, `PixelShuffle(4)` y suma residual sobre un reescalado vecino-más-cercano | 1.2 M | **Vídeo en vivo** y vídeos subidos |
-| `RealESRGAN_x4plus` | **RRDBNet** (ESRGAN): 23 bloques *Residual-in-Residual Dense*, sin batch-norm, dos etapas de *upsampling* ×2 | 16.7 M | Imagen fija |
+| `realesr-general-x4v3` | **SRVGGNetCompact**: 32 convoluciones 3×3 + PReLU a la resolución de entrada, `PixelShuffle(4)` y suma residual sobre un reescalado vecino-más-cercano | 1.2 M | **Vídeo en vivo** |
 
-Ambas se entrenaron (por sus autores) como generador de una **GAN** con
+(`RealESRGAN_x4plus`, RRDBNet de 16.7 M, se retiró junto con las subidas de
+imagen y vídeo.)
+
+Se entrenó (por sus autores) como generador de una **GAN** con
 degradaciones reales sintéticas (desenfoque, ruido, compresión JPEG), por eso
 limpian ruido y artefactos de cámara además de ampliar.
 
@@ -394,8 +505,11 @@ resultado pareciera una foto real.
 | Persistencia (RQF06) | `perception/alerts.py` | ALTO 1.2 s, MEDIO 0.6 s, histéresis 1 s, cooldown 15 s. |
 | Alerta con evidencia (RQF07) | `perception/alerts.py` | Fotograma **anotado y anonimizado** + línea JSON. |
 | Panel (RQF08) | `frontend/` + `api/alerts.py` | Lista, borrado individual/selección/todas, ZIP. |
-| Mejora de vídeo en vivo | `services/live_enhancer.py` | Hilo propio, FP16, caché por `frame_id`. |
-| Mejora de imagen/vídeo subido | `services/inferencer.py` | SR **antes** de detectar (detalles finos para objetos pequeños). |
+| Mejora de vídeo en vivo | `services/live_enhancer.py` | Hilo propio, FP16 (FP32 en GTX 16xx), caché por `frame_id`. |
+| Perfil GTX 1650 | `backend/hardware.py` | §4.5. |
+| Parada del sistema | `services/lifecycle.py` + `/api/system/stop` | Pasos de parada registrados por cada servicio y módulo; ver §3. |
+| Audio | `modulos/audio/` | §4.6. |
+| Imagen | `modulos/imagen/` | §4.6. |
 | Anonimización (RQNF14) | `privacy/anonymizer.py` | Ver §8. |
 | Estado del sistema (RQNF09/26) | `/api/health` | OPERATIVO / DEGRADADO / NO OPERATIVO real, no fijo. |
 | Autenticación (RQNF19) | `api/auth.py` | Token por variable de entorno, comparación en tiempo constante. |
@@ -411,7 +525,10 @@ resultado pareciera una foto real.
 |---|---|
 | **No reentrenar el modelo** | El Modelo S7 v4 ya supera RQNF10 (0.776/0.768) y es el entregable estable. Las mejoras de esta rama son de sistema, no de pesos. |
 | **Real-ESRGAN `general-x4v3` para el vivo** | Es de la misma familia Real-ESRGAN pero compacto: 22 ms/cuadro frente a ~460 ms de la versión anterior. Permite ver el vídeo mejorado fluido. |
-| **Real-ESRGAN `x4plus` para imagen fija** | Máxima calidad cuando no hay prisa (0.78 s por foto). |
+| **Solo vídeo en vivo** | Pedido del cliente: se quitaron imagen y vídeo subidos y el modelo de SR que solo ellos usaban. |
+| **Audio e imagen como módulos aparte** (`modulos/`) | Pedido: integrar el trabajo de los otros grupos sin interferir en el vídeo. Se cargan aislados y el vídeo no los importa. |
+| **Detector por reglas + MLP de audio en paralelo** | El grupo dejó activo el detector de `final.py` y el MLP solo en scripts; para que todas sus funciones estén activas corren los dos sobre el mismo audio. |
+| **scikit-learn 1.7.2** para el MLP de audio | El grupo fijó 1.9.1, que exige Python ≥ 3.11; 1.7.2 carga el mismo modelo con salidas idénticas (probado). |
 | **Arquitecturas en PyTorch puro** en vez de `basicsr`/`realesrgan` | Esos paquetes importan `torchvision.transforms.functional_tensor`, eliminado en torchvision 0.26; romperían el entorno. Son ~100 líneas y cargan los pesos oficiales con `strict=True`. |
 | **FP16 en la SR** | Medido: diferencia máxima 2/255 frente a FP32 y el doble de rápido. |
 | **SR en hilo propio, emparejada por `frame_id`** | La detección no se frena y las cajas coinciden con la imagen mejorada. |
@@ -432,12 +549,14 @@ resultado pareciera una foto real.
 | ONNX de Real-ESRGAN con onnxruntime / `cv2.dnn` | El ONNX público tiene `scales` en el slot de `roi` del nodo `Resize` y se cuelga. |
 | ONNX → `onnx2torch` (versión anterior) | Funcionaba, pero ~460 ms/cuadro: el vivo con SR quedaba a ~2 fps. Reemplazado. |
 | RIFE (interpolación de cuadros) | Probado en semanas anteriores; no dio buenos resultados (commit `ea699eb`). Inventa cuadros intermedios, algo indeseable en un sistema de evidencia. |
-| `RealESRGAN_x4plus` en vivo | 0.78 s por cuadro: incompatible con tiempo real. |
+| `RealESRGAN_x4plus` en vivo | 0.78 s por cuadro: incompatible con tiempo real (y ya no hay subidas que lo usen). |
+| Migrar la versión de vídeo del repo de audio | Pedido explícito: solo se trae el audio. |
+| Que Imagen use el motor de vídeo (como su `/api/imagen/analizar`) | Reiniciaba las caches del vídeo en vivo; ahora usa sus propios modelos y solo **lee** el último resultado. |
 | `torch.jit` / `torch.compile` | Problemas con `sm_120` y tiempos de compilación largos; FP16 ya basta. |
 | FP16 en YOLO | Medido peor en Turing (219 → 504 ms) y sin ganancia en otras GPUs. |
 | Mejorar la imagen **antes** de detectar en vivo | Cambia la distribución de entrada del detector en tiempo real y añade latencia; en vivo la SR es solo para visualizar. |
 | WebRTC / WebSockets | Más complejo; el JPEG crudo por HTTP ya da ~30 fps en red local. |
-| Rediseñar el frontend | Requisito: misma interfaz (solo se actualizó un texto). |
+| Rediseñar el frontend | Se mantuvo el mismo estilo; solo se quitaron las pestañas de subida y se añadieron Audio, Imagen y el botón de parada. |
 
 ---
 
@@ -500,7 +619,7 @@ por exigencia del documento de requisitos (ERS)** del curso. Detalle y evidencia
 | RQF08 | Panel de supervisión | **Cumple** |
 | RQNF01 | ≥ 30 fps | **Cumple en GPU** — 34 fps medidos (RTX 5070); en CPU ~7 fps |
 | RQNF02 | Latencia < 500 ms | **Cumple** — respuesta 4–5 ms, motor 27 ms |
-| RQNF03 | GPU ≥ 6 GB | **Cumple** (verificado por `tools/check_env.py`) |
+| RQNF03 | GPU ≥ 6 GB | **Supera** — funciona en 4 GB (GTX 1650) con el perfil `baja_vram`; pico medido 0.32 GB |
 | RQNF09 / RQNF26 | Estado operativo real | **Cumple** — `/api/health` |
 | RQNF10 | mAP@0.5 > 75 % | **Cumple** — val 0.776, test 0.768 |
 | RQNF12 | Resiliencia a iluminación | **Cumple** — augmentations HSV; SR limpia ruido |
@@ -510,7 +629,7 @@ por exigencia del documento de requisitos (ERS)** del curso. Detalle y evidencia
 | RQNF19 | Autenticación | **Cumple** — token compartido (no hay usuarios/roles) |
 | RQNF20 | Arquitectura modular | **Cumple** — §4.1 |
 | RQNF21 / 24 | Configuración externa | **Cumple** — `configs/app.yaml` |
-| RQNF22 | Pruebas con vídeo pregrabado | **Cumple** — pestaña Vídeo |
+| RQNF22 | Pruebas con vídeo pregrabado | **Retirado por pedido del cliente** — el sistema es solo en vivo; una cámara IP/RTSP puede reproducir un vídeo grabado por `/api/stream` |
 | RQNF23 | Diagnóstico | **Cumple** — `/api/health`, `tools/check_env.py`, logs |
 | RQNF25 | Escalable a multicámara | **Preparado** — servicios desacoplados; una cámara en V1 |
 | RQNF11 / 27 | Horario / sin actuadores | Dependen del despliegue; el sistema es pasivo |
@@ -526,16 +645,20 @@ Video-G-G/
 │   ├── __main__.py            entrada: python -m backend
 │   ├── app.py                 fábrica Flask: une capas y servicios
 │   ├── config.py              carga de configs/app.yaml (dataclasses)
+│   ├── hardware.py            detección de GPU y perfil baja_vram (GTX 1650)
 │   ├── api/                   rutas HTTP: analysis, alerts, system, auth
-│   ├── services/              inferencer (hilo CUDA), live_enhancer (SR), video_io
+│   ├── services/              inferencer (hilo CUDA), live_enhancer (SR), video_io, lifecycle
 │   ├── perception/            engine, detectors, pose, tracking, alerts, catalog
 │   ├── enhancement/           Real-ESRGAN: archs + super_resolution
 │   ├── privacy/               anonimización de rostros
 │   └── rendering/             dibujo y codificación
+├── modulos/                   módulos aparte (no tocan el vídeo)
+│   ├── audio/                 percepción acústica (repo brigitteve/percepcion)
+│   └── imagen/                análisis de imagen (repo AndreCastAst, rama s7-imagen)
 ├── frontend/templates/        panel web
 ├── configs/app.yaml           configuración de ejecución
 ├── models/                    pesos (ver models/README.md)
-├── requirements/              base · torch-cu128 · torch-cpu · dev
+├── requirements/              base · modulos · torch-cu128 · torch-cpu · dev
 ├── scripts/                   setup.sh · run.sh · get_dataset.sh
 ├── tools/                     download_models · check_env · render_architecture
 ├── tests/                     unitarias + humo de la API
@@ -551,29 +674,41 @@ Video-G-G/
 | Ruta | Método | Descripción |
 |---|---|---|
 | `/` | GET | Panel |
-| `/api/health` | GET | Estado, GPU, modelos, SR, autenticación |
-| `/api/detect` | POST | `file` (imagen) + `conf` → detecciones + imagen anotada (hex) |
+| `/api/health` | GET | Estado, GPU, perfil de hardware, SR, autenticación, módulos |
 | `/api/frame` | POST | JPEG crudo; query `conf`, `overlay`, `sr`, `fid` → cajas 0..1 (+ imagen mejorada en base64 si `sr=1`) |
-| `/api/video` | POST | `file` (vídeo) → MP4 H.264 anotado con audio |
+| `/api/system/stop` | POST | Detiene todo el sistema (solo local sin `PANEL_TOKEN`) |
+| `/api/system/status` | GET | Si el sistema se está deteniendo |
 | `/api/stream` | GET | MJPEG de la cámara del servidor (`?cam=` índice o URL) |
 | `/api/cameras` | GET | Cámaras locales del servidor |
 | `/api/alerts` | GET | Últimas 100 alertas con URL de evidencia |
 | `/api/alerta-imagen/<día>/<archivo>` | GET | Imagen de evidencia |
 | `/api/alertas.zip` | GET | ZIP con evidencias + registro |
-| `/api/alertas` | DELETE | Borra todas, o `{"ids": [...]}` |
+| `/api/alertas` | DELETE | Borra todas, o `{"ids": [...]}`; `?source=audio` solo las acústicas |
 | `/login` | GET/POST | Acceso con `PANEL_TOKEN` |
+| `/api/audio/sessions` | POST | Módulo audio: crea una sesión de micrófono |
+| `/api/audio/sessions/<id>/chunks` | POST | 8000 muestras float32 LE (500 ms), cabeceras `X-Audio-Sequence` y `X-Audio-Offset` |
+| `/api/audio/sessions/<id>` · `/stop` | GET · POST | Estado y métricas en vivo · cerrar sesión |
+| `/api/audio/sensitivity` · `/status` | POST · GET | Sensibilidad alta/media/baja · estado del módulo |
+| `/api/audio/simulate` | POST | Sesión sintética de `final.py` con *ground truth* |
+| `/api/audio/analyze-file` | POST | Archivo **de audio** (`file`), `sensitivity`, `improve_audio` |
+| `/api/imagen/pruebas/frame` | POST | Módulo imagen: `frame` (foto o fotograma) + `modo` → JSON + imagen anotada |
+| `/api/imagen/caracteristicas` | GET | Vector `imagen-0.1.0` del último fotograma del vídeo en vivo (solo lectura) |
+| `/api/imagen/estado` | GET | Modelos cargados y dispositivo |
 
 ---
 
 ## 13. Pruebas
 
 ```bash
-pip install -r requirements/dev.txt     # opcional (pytest)
-python -m unittest discover -s tests -t .   # o: pytest tests
+pip install -r requirements/dev.txt     # pytest
+python -m pytest                        # vídeo + módulos (60 pruebas)
+node --test modulos/audio/tests/audio-worklet.test.cjs   # worklet de audio (5)
 ```
 
-- `tests/test_units.py`: configuración, tracker, geometría de pose, persistencia y escritura de alertas (sin GPU).
-- `tests/test_api_smoke.py`: arranca la app completa con los modelos reales y prueba `/api/health`, `/api/detect`, `/api/frame` (con SR) y las rutas de alertas. Se salta si faltan los pesos.
+- `tests/test_units.py`: configuración, tracker, geometría de pose, persistencia, alertas, **perfil GTX 1650** y **parada ordenada** (sin GPU).
+- `tests/test_api_smoke.py`: arranca la app completa con los modelos reales; prueba `/api/health` (perfil y módulos), que las rutas de subida **ya no existen**, `/api/frame` (con SR), el módulo Imagen y las rutas de alertas. Se salta si faltan los pesos.
+- `modulos/audio/tests/`: pruebas del grupo de audio (sesiones, PCM, cooldown, modelo ML con sus hashes y predicciones de referencia) y `test_integracion_panel.py` (alertas en el panel, ZIP, borrado, autenticación, vídeo respondiendo durante el audio, rechazo de vídeos, simulación, parada).
+- `modulos/imagen/tests/`: pruebas del grupo de imagen (calidad, preprocesamiento, posturas, ROI, muestreo de clips, contrato de características).
 
 La refactorización se validó además comparando el motor nuevo con el de la
 rama `semana-7` sobre la misma secuencia: salidas **idénticas** (ver
@@ -588,6 +723,10 @@ rama `semana-7` sobre la misma secuencia: salidas **idénticas** (ver
 | [Ultralytics YOLOv8](https://github.com/ultralytics/ultralytics) | Detector y pesos COCO | AGPL-3.0 |
 | [MediaPipe](https://github.com/google-ai-edge/mediapipe) | Pose y detección de rostros | Apache-2.0 |
 | [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) (X. Wang et al., ICCVW 2021) | Superresolución | BSD-3-Clause |
+| [brigitteve/percepcion](https://github.com/brigitteve/percepcion) | Módulo de audio (detector `final.py` + MLP de caídas) | grupo de audio del curso |
+| [AndreCastAst/Repo-video-imagen-audio @ s7-imagen](https://github.com/AndreCastAst/Repo-video-imagen-audio/tree/s7-imagen) | Módulo de imagen | grupo de imagen del curso |
+| [librosa](https://librosa.org) · [scikit-learn](https://scikit-learn.org) · noisereduce | Análisis acústico y MLP | ISC · BSD-3-Clause · MIT |
+| YOLO11n / YOLO11n-Pose (Ultralytics) | Módulo de imagen | AGPL-3.0 |
 | [Fall Detection Dataset](https://www.kaggle.com/datasets/uttejkumarkandagatla/fall-detection-dataset) | caído / sentado | Kaggle |
 | [Stairs](https://www.kaggle.com/datasets/samuelayman/stairs) | escalera | Kaggle |
 | [MOT15](https://www.kaggle.com/datasets/mdraselsarker/mot15-challenge-dataset) | persona | Kaggle |
@@ -605,3 +744,5 @@ Los datasets pertenecen a sus autores y se usan solo con fines académicos.
 - MediaPipe Pose describe **una persona por fotograma**; con varias personas, las señales de pose se asignan a la que mejor encaja.
 - El test del Modelo S7 v4 no contiene caídas reales; la confirmación de caída se apoya en la geometría de pose.
 - El servidor de Flask es de un solo proceso (adecuado para una cámara). Sin HTTPS no hay cifrado.
+- El perfil de GTX 1650 se validó en una RTX 5070 limitando la memoria a 3.6 GB y forzando FP32; los tiempos reales en una 1650 serán mayores (la vista en vivo sigue a 30 fps porque la detección es asíncrona).
+- El audio se probó con señales sintéticas y el micrófono simulado del navegador; sus umbrales (de `final.py`) no están calibrados en una escalera real y sus índices no son probabilidades clínicas.

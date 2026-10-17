@@ -1,0 +1,62 @@
+{# Panel «Imagen» del módulo modulos/imagen (repo AndreCastAst, rama s7-imagen).
+   Se incluye desde frontend/templates/index.html solo si el módulo cargó.
+   Sustituye a la antigua pestaña de imagen, que usaba el motor de vídeo. #}
+  <div class="panel" id="p-imagen">
+    <div class="grid">
+      <div>
+        <div class="ctrl">
+          <label>Modo de imagen
+            <select id="img-modo" class="sel">
+              <option value="adaptativo" selected>adaptativo</option>
+              <option value="original">original</option>
+              <option value="clahe">clahe</option>
+              <option value="gamma">gamma</option>
+            </select>
+          </label>
+          <input type="file" id="img-archivo" accept="image/*">
+          <button id="img-evaluar">Analizar fotografía</button>
+        </div>
+        <div class="ctrl">
+          <button id="img-iniciar" class="ghost">Iniciar cámara</button>
+          <button id="img-detener" class="ghost" disabled>Detener cámara</button>
+          <button id="img-features" class="ghost"
+                  title="Vector de características (imagen-0.1.0) del último fotograma del vídeo en vivo. Solo lectura: no altera el vídeo.">
+            Características del vídeo en vivo</button>
+          <span id="img-estado" class="req">Esperando imagen</span>
+        </div>
+        <div class="stage" id="img-stage" style="flex-direction:column;gap:8px">
+          <div class="placeholder">Elige una fotografía o inicia la cámara.
+            Calidad óptica, YOLO11, YOLO11-Pose, articulaciones y celulares.<br>
+            No calcula accidentes ni realiza seguimiento.</div>
+        </div>
+        <video id="img-camara" autoplay muted playsinline
+               style="display:none;width:22%;min-width:130px;margin-top:8px;border:1px solid var(--line);border-radius:6px"></video>
+        <div class="card" style="margin-top:14px">
+          <h2>Resultados estructurados (JSON)</h2>
+          <pre id="img-datos" style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:360px;overflow:auto;font-size:11.5px;color:#c8cfdc">Sin resultados.</pre>
+        </div>
+      </div>
+      <div>
+        <div class="card" style="margin-bottom:14px" id="img-resumen">
+          <h2>Resumen · módulo Imagen</h2>
+          <div class="req">Sin resultados.</div>
+        </div>
+        <div class="card" style="margin-bottom:14px">
+          <h2>Advertencias</h2>
+          <div id="img-advertencias" class="req">—</div>
+        </div>
+        <div class="card">
+          <h2>Cómo leer el resultado</h2>
+          <div style="font-size:12.5px;color:var(--muted);line-height:1.7">
+            <b style="color:#46c846">Verde</b>: persona (YOLO11n) ·
+            <b style="color:#fac800">amarillo</b>: celular ·
+            <b style="color:#ff8c00">naranja</b>: pose sin persona YOLO (revisar).<br>
+            Los estados posturales son <i>indicios para revisión</i>, nunca una
+            caída confirmada; la interpretación temporal corresponde al vídeo.<br>
+            El análisis usa modelos propios del módulo y no interfiere con el
+            vídeo en vivo.
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
