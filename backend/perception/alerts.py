@@ -56,13 +56,18 @@ class AlertManager:
                  persist_seconds: dict, persist_default: float,
                  grace_seconds: float, cooldown_seconds: float,
                  keep_days: int = 7, max_images: int = 200,
-                 anonymizer=None):
+                 anonymizer=None, persist_by_risk: dict | None = None,
+                 cooldown_by_risk: dict | None = None):
         self.tracker = tracker
         self.dir = Path(alert_dir)
         self.persist_seconds = persist_seconds
         self.persist_default = persist_default
         self.grace = grace_seconds
         self.cooldown = cooldown_seconds
+        # Riesgos con su propia persistencia/enfriamiento (p. ej. el
+        # desequilibrio del esqueleto ya se confirma en BalanceMonitor).
+        self.persist_by_risk = persist_by_risk or {}
+        self.cooldown_by_risk = cooldown_by_risk or {}
         self.keep_days = keep_days
         self.max_images = max_images
         self.anonymizer = anonymizer
@@ -122,8 +127,10 @@ class AlertManager:
         dur = now - st.risk_since[risk]
         meta = RISK_CATALOG.get(risk, {})
         severity = meta.get("riesgo", "MEDIO")
-        required = self.persist_seconds.get(severity, self.persist_default)
-        if dur < required or now - st.alerts.get(risk, 0.0) <= self.cooldown:
+        required = self.persist_by_risk.get(
+            risk, self.persist_seconds.get(severity, self.persist_default))
+        cooldown = self.cooldown_by_risk.get(risk, self.cooldown)
+        if dur < required or now - st.alerts.get(risk, 0.0) <= cooldown:
             return
         st.alerts[risk] = now
         self._seq += 1

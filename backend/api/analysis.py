@@ -17,7 +17,7 @@ import numpy as np
 from flask import Blueprint, Response, jsonify, request
 
 from ..rendering.draw import (annotate_status, encode_jpeg, normalise_boxes,
-                              summarise)
+                              normalise_skeletons, summarise)
 from ..services.video_io import open_capture
 from .context import runtime
 
@@ -45,6 +45,7 @@ def _body(dets, result, timing, **extra) -> dict:
         "sistema": result["sistema"],
         "timing": {**timing, "stages": result.get("stages", {})},
         "frame_id": result.get("frame_id"),
+        "esqueletos": result.get("esqueletos", []),
     }
     body.update(extra)
     return body
@@ -98,7 +99,8 @@ def live_frame():
                         "frame_id": None, "pendiente": True})
     annotated, result, dets, timing = got
     h, w = annotated.shape[:2]
-    body = _body(normalise_boxes(dets, w, h), result, timing, size=[w, h])
+    body = _body(normalise_boxes(dets, w, h), result, timing, size=[w, h],
+                 esqueletos=normalise_skeletons(result.get("esqueletos", []), w, h))
     body["summary"] = summarise(dets)
     if want_sr and enhancer is not None and enhancer.available:
         sr_b64 = enhancer.get(result.get("frame_id"))

@@ -91,6 +91,54 @@ camera:
   source: 0
   reconnect_attempts: 5
 
+# Esqueletos con YOLOv8-Pose (backend/perception/skeleton/): 17 puntos por
+# persona con identidad (ByteTrack), suavizado, cinemática y alerta de pérdida
+# de equilibrio. Pensado para cámara alta en diagonal (vista picada), varias
+# personas y un pasamanos que tapa parte del cuerpo.
+skeleton:
+  enabled: true
+  model: models/pose/yolov8s-pose.pt   # s: mejor con personas pequeñas en vista picada (n: más rápido)
+  imgsz: 640
+  conf: 0.30            # confianza mínima de la PERSONA
+  iou: 0.6
+  every: 2              # cada cuántos fotogramas (15 Hz a 30 fps); las velocidades usan tiempo real
+  tracker: configs/tracker_esqueletos.yaml
+  min_keypoints: 5      # menos puntos fiables = esqueleto descartado (fragmentos)
+  forget_s: 3.0         # olvidar una identidad no vista en este tiempo
+  # Morfología (apertura/cierre) de la máscara de primer plano antes de la pose.
+  # off: medido, no mejora de forma fiable (ver skeleton/morphology.py).
+  # mascara: MOG2 + apertura + cierre (para probarlo con el vídeo real).
+  morphology: "off"
+  keypoints:
+    conf_min: 0.45      # puntos por debajo de esta confianza se descartan
+    hold_s: 0.6         # un punto tapado (pasamanos) se mantiene este tiempo
+    max_jump_torso: 1.2 # salto mayor entre fotogramas = punto erróneo (cambio izq/der)
+  smoothing:            # filtro One Euro (coordenadas normalizadas por la altura)
+    min_cutoff: 1.0     # Hz: menor = más suave en reposo
+    beta: 1.5           # mayor = menos retraso en movimientos rápidos
+    d_cutoff: 1.0
+    velocity_alpha: 0.5 # suavizado exponencial de velocidad y aceleración
+  perspective:
+    # Vista picada: punto (x, y normalizados a la imagen; y > 1 = bajo la imagen)
+    # donde convergen las verticales del mundo (prolongar dos postes o marcos
+    # de puerta). null = vertical de la imagen + línea base por persona.
+    nadir: null
+  balance:              # pérdida de equilibrio (unidades en «torsos» de esa persona)
+    trunk_abs_deg: 35         # tronco inclinado (sin línea base todavía)
+    trunk_dev_deg: 25         # desvío respecto a la línea base de la persona
+    trunk_extreme_deg: 55     # por sí solo ya es pérdida de equilibrio
+    baseline_s: 3.0           # ventana de la línea base (tránsito estable)
+    baseline_min_samples: 8
+    hip_down_speed: 2.0       # torsos/s hacia abajo (bajar la escalera ≈ 0.5-1)
+    hip_accel: 8.0            # torsos/s²
+    head_accel: 10.0          # torsos/s²
+    com_margin: 0.35          # centro de masa fuera de los pies, en torsos
+    feet_pad: 0.15            # la base de apoyo incluye medio pie a cada lado del tobillo
+    min_votes: 2              # criterios a la vez para considerarlo inestable
+    persist_s: 0.25           # sostenido este tiempo -> pérdida de equilibrio
+    cooldown_s: 10            # una alerta por persona cada 10 s como máximo
+    min_torso_px: 24          # personas más pequeñas no se evalúan (poco fiable)
+
 # Perfil de hardware. Debe funcionar en una GTX 1650 (4 GB, Turing sm_75):
 # la build cu128 de PyTorch ya soporta sm_75; el perfil "baja_vram" solo
 # ajusta lo que en esa tarjeta cuesta demasiado. Ver backend/hardware.py.
@@ -100,6 +148,7 @@ hardware:
   baja_vram:
     enhancement.half: false            # GTX 16xx: FP16 da NaN/negro en varias redes
     enhancement.live.input_max: 320    # ~2.2x menos trabajo para Real-ESRGAN en vivo
+    skeleton.every: 3                  # pose cada 3 fotogramas (10 Hz a 30 fps)
 
 # Módulos aparte. Viven en modulos/ y NO modifican el vídeo en vivo: si uno
 # falla al cargar, el panel de vídeo sigue funcionando igual.

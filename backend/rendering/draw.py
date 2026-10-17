@@ -13,6 +13,7 @@ import cv2
 import numpy as np
 
 from ..perception.catalog import CLASS_INFO, RISK_COLOR, RISK_ORDER
+from ..perception.skeleton.keypoints import BONE_COLOR_BGR, BONES
 
 _FONT = cv2.FONT_HERSHEY_SIMPLEX
 _INK = (20, 20, 20)
@@ -35,11 +36,70 @@ def _obstacle_style(o: dict) -> tuple[tuple, str, bool]:
     return RISK_COLOR["CONTEXTO"], "ESCENA", False
 
 
+_SKEL_STATE_COLOR = {"perdida_equilibrio": RISK_COLOR["ALTO"],
+                     "inestable": RISK_COLOR["MEDIO"]}
+
+
+def draw_skeletons(frame: np.ndarray, skeletons: list[dict]) -> None:
+    """Esqueletos de YOLOv8-Pose: huesos por grupo, puntos vistos (relleno),
+    puntos mantenidos por oclusión (hueco) y el ID con su estado."""
+    for sk in skeletons:
+        kps = sk.get("kps") or []
+        if not kps:
+            continue
+        state = (sk.get("equilibrio") or {}).get("estado", "")
+        alarm = _SKEL_STATE_COLOR.get(state)
+        for group, bones in BONES.items():
+            color = alarm or BONE_COLOR_BGR[group]
+            for a, b in bones:
+                if kps[a][3] and kps[b][3]:
+                    pa = (int(kps[a][0]), int(kps[a][1]))
+                    pb = (int(kps[b][0]), int(kps[b][1]))
+                    held = kps[a][3] == 2 or kps[b][3] == 2
+                    cv2.line(frame, pa, pb, color, 1 if held else 2, cv2.LINE_AA)
+        for x, y, _c, st in kps:
+            if st:
+                cv2.circle(frame, (int(x), int(y)), 3, (40, 40, 40), -1 if st == 1 else 1,
+                           cv2.LINE_AA)
+                cv2.circle(frame, (int(x), int(y)), 2, alarm or (0, 255, 255),
+                           -1 if st == 1 else 1, cv2.LINE_AA)
+        if sk.get("com"):
+            cx, cy = (int(v) for v in sk["com"])
+            cv2.drawMarker(frame, (cx, cy), alarm or (255, 0, 255),
+                           cv2.MARKER_CROSS, 10, 2)
+        if sk.get("id") is not None:
+            x1, y1 = int(sk["bbox"][0]), int(sk["bbox"][1])
+            m = sk.get("metricas") or {}
+            ang = m.get("tronco_deg")
+            # OpenCV no dibuja «°»: se escribe «deg».
+            txt = f'P{sk["id"]}' + (f" tronco {ang:.0f}deg" if ang is not None else "")
+            if state == "perdida_equilibrio":
+                txt += " DESEQUILIBRIO"
+            cv2.putText(frame, txt, (x1, max(12, y1 - 22)), _FONT, 0.45,
+                        alarm or (0, 255, 255), 1, cv2.LINE_AA)
+
+
+def normalise_skeletons(skeletons: list[dict], w: int, h: int) -> list[dict]:
+    """Coordenadas de puntos, caja y centro de masa en 0..1 (navegador)."""
+    out = []
+    for sk in skeletons:
+        x1, y1, x2, y2 = sk["bbox"]
+        out.append({**sk,
+                    "bbox": [round(x1 / w, 4), round(y1 / h, 4),
+                             round(x2 / w, 4), round(y2 / h, 4)],
+                    "kps": [[round(x / w, 4), round(y / h, 4), c, s]
+                            for x, y, c, s in sk.get("kps", [])],
+                    "com": None if not sk.get("com") else
+                    [round(sk["com"][0] / w, 4), round(sk["com"][1] / h, 4)]})
+    return out
+
+
 def draw_all(frame: np.ndarray, result: dict) -> list[dict]:
     """Dibuja el resultado completo sobre `frame` (in place).
 
     Devuelve las detecciones enriquecidas para la interfaz.
     """
+    draw_skeletons(frame, result.get("esqueletos", []))
     out = []
     for d in result.get("detecciones", []):
         info = CLASS_INFO.get(d["class_id"], {"name": d["class_name"],

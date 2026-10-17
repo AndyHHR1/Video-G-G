@@ -137,7 +137,7 @@ source .venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements/torch-cu128.txt     # GPU NVIDIA
 # pip install -r requirements/torch-cpu.txt    # sin GPU (o macOS)
-pip install -r requirements/base.txt
+pip install -r requirements/base.txt           # incluye lap (ByteTrack de los esqueletos)
 pip install -r requirements/modulos.txt        # audio e imagen
 python tools/download_models.py
 ```
@@ -402,6 +402,57 @@ foto por el motor de vídeo.
 
 El único cambio a su código es que los modelos se cargan en el primer uso desde
 `models/imagen/` (`modulo_imagen/modelos.py`) en lugar de al importar.
+
+### 4.7 Esqueletos con YOLOv8-Pose y pérdida de equilibrio
+
+`backend/perception/skeleton/` — pensado para **cámara alta en diagonal (vista
+picada), varias personas y un pasamanos que tapa parte del cuerpo**. Corre
+dentro del motor de riesgo (etapa 3b, cada `skeleton.every` fotogramas) junto a
+MediaPipe, que sigue dando las señales de pasamanos y distracción.
+
+| Paso | Archivo | Qué hace |
+|---|---|---|
+| Pose + ID | `estimator.py` | YOLOv8s-Pose: 17 puntos COCO por persona; identidad con **ByteTrack** (filtro de Kalman, `configs/tracker_esqueletos.yaml`), que sostiene el ID ~3 s de oclusión. Une a una persona **partida en dos por el pasamanos** (medido: el pasamanos sintético convertía 4 personas en 6 detecciones). |
+| Filtrado | `filters.py` | Descarta puntos con confianza < `conf_min` y saltos imposibles (cambio izq/der); un punto tapado se **mantiene** `hold_s` y se dibuja hueco; suavizado **One Euro** (suaviza el temblor sin retrasar los movimientos bruscos). |
+| Cinemática | `kinematics.py` | Ángulo del tronco; velocidad y aceleración de **cadera y cabeza**; **centro de masa** (segmentos de Dempster) **frente a los pies**. Todo en **torsos** de esa persona, así no depende de lo lejos que esté de la cámara. |
+| Equilibrio | `balance.py` | Votos de 5 criterios + persistencia + enfriamiento; un criterio que no se puede ver (tobillos tapados) no vota. |
+| Orquestación | `analyzer.py` | Estado por identidad; olvida IDs no vistos en `forget_s`. |
+| Morfología | `morphology.py` | **Omitida** por defecto: medida, no mejora (ver abajo). |
+
+**Vista picada.** La vertical de la imagen no es la del mundo. Dos defensas:
+(1) el ángulo del tronco se compara con la **línea base propia** de cada
+persona (su mediana mientras camina estable), lo que cancela la inclinación
+aparente; (2) opcionalmente, `skeleton.perspective.nadir` = punto donde
+convergen las verticales (se obtiene prolongando dos postes o marcos de
+puerta) y la vertical se calcula en la posición de cada persona.
+
+**Alerta de pérdida de equilibrio.** Umbrales en `configs/app.yaml →
+skeleton.balance`: tronco (desvío ≥ 25° respecto a la línea base, o ≥ 35° sin
+ella), centro de masa fuera de los pies (> 0.35 torsos, contando medio pie a
+cada lado), cadera bajando ≥ 2 torsos/s, aceleración de cadera ≥ 8 y de cabeza
+≥ 10 torsos/s². Hace falta **≥ 2 criterios a la vez durante 0.25 s** (o el
+tronco ≥ 55°). Un solo criterio no basta: bajar deprisa mueve la cadera hacia
+abajo (medido en la prueba sintética: 1.2 torsos/s frente al umbral de 2.0) y
+agacharse inclina el tronco. La alerta entra en `AlertManager` como
+`desequilibrio_pose` (ALTO, RQF02 4), con evidencia anonimizada y registro.
+
+**Morfología (apertura/cierre).** YOLOv8-Pose trabaja con la imagen en color,
+no con una máscara. Medido con las imágenes de ejemplo de Ultralytics (con y
+sin un pasamanos sintético) y con un vídeo: los cambios en la confianza de los
+puntos son mixtos y pequeños (como mucho ±0.02–0.04). Por eso
+`skeleton.morphology: "off"`. Para comprobarlo con el vídeo real de la
+escalera: `python tools/eval_morfologia_pose.py video.mp4`.
+
+**Coste.** ~26 ms por pasada de YOLOv8s-Pose (RTX 5070, perfil de GTX 1650,
+cada 3 fotogramas); con todo activo, pico de **0.36 GB** de VRAM.
+
+**Dibujo.** En vivo el navegador pinta huesos por color (cabeza, brazos,
+tronco, piernas), puntos rellenos (vistos) o huecos/discontinuos (mantenidos
+por oclusión), el centro de masa (cruz) y `P<ID> <ángulo>`; en rojo la persona
+con pérdida de equilibrio y en naranja si está inestable. El servidor dibuja lo
+mismo en las evidencias, el modo overlay y `/api/stream`. El panel muestra
+una tabla por persona (estado, tronco y desvío, velocidad de cadera, centro de
+masa).
 
 ---
 
@@ -675,7 +726,7 @@ Video-G-G/
 |---|---|---|
 | `/` | GET | Panel |
 | `/api/health` | GET | Estado, GPU, perfil de hardware, SR, autenticación, módulos |
-| `/api/frame` | POST | JPEG crudo; query `conf`, `overlay`, `sr`, `fid` → cajas 0..1 (+ imagen mejorada en base64 si `sr=1`) |
+| `/api/frame` | POST | JPEG crudo; query `conf`, `overlay`, `sr`, `fid` → cajas 0..1, `esqueletos` (17 puntos 0..1 por persona con `id`, `metricas` y `equilibrio`) (+ imagen mejorada en base64 si `sr=1`) |
 | `/api/system/stop` | POST | Detiene todo el sistema (solo local sin `PANEL_TOKEN`) |
 | `/api/system/status` | GET | Si el sistema se está deteniendo |
 | `/api/stream` | GET | MJPEG de la cámara del servidor (`?cam=` índice o URL) |
@@ -701,11 +752,12 @@ Video-G-G/
 
 ```bash
 pip install -r requirements/dev.txt     # pytest
-python -m pytest                        # vídeo + módulos (60 pruebas)
+python -m pytest                        # vídeo + esqueletos + módulos (74 pruebas)
 node --test modulos/audio/tests/audio-worklet.test.cjs   # worklet de audio (5)
 ```
 
 - `tests/test_units.py`: configuración, tracker, geometría de pose, persistencia, alertas, **perfil GTX 1650** y **parada ordenada** (sin GPU).
+- `tests/test_skeleton.py`: esqueletos sin GPU (estimador falso): filtro de confianza y oclusión, One Euro, saltos imposibles, ángulo del tronco, nadir, centro de masa con tobillos tapados, persona de pie, bajar deprisa (sin alerta), caída (una alerta), pasamanos tapando piernas, dos personas independientes, un solo criterio no alerta, fusión de la persona partida por el pasamanos.
 - `tests/test_api_smoke.py`: arranca la app completa con los modelos reales; prueba `/api/health` (perfil y módulos), que las rutas de subida **ya no existen**, `/api/frame` (con SR), el módulo Imagen y las rutas de alertas. Se salta si faltan los pesos.
 - `modulos/audio/tests/`: pruebas del grupo de audio (sesiones, PCM, cooldown, modelo ML con sus hashes y predicciones de referencia) y `test_integracion_panel.py` (alertas en el panel, ZIP, borrado, autenticación, vídeo respondiendo durante el audio, rechazo de vídeos, simulación, parada).
 - `modulos/imagen/tests/`: pruebas del grupo de imagen (calidad, preprocesamiento, posturas, ROI, muestreo de clips, contrato de características).

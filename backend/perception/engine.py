@@ -5,6 +5,8 @@
        ├─ CocoDetector.people()      ¿dónde hay personas?          RQF02
        ├─ PostureDetector.stairs()   ¿dónde está la escalera?      contexto
        ├─ PoseAnalyzer.analyse()     pasamanos, distracción, tambaleo  RQF02 (2)(3)(4)
+       ├─ SkeletonAnalyzer.step()    YOLOv8-Pose: 17 puntos por persona, ID,
+       │                             cinemática y pérdida de equilibrio  RQF02 (4)
        ├─ CocoDetector.obstacles()   objetos sobre el escalón      RQF02 (1)
        ├─ postura de cada persona    geometría de pose > recorte   RQF03
        ├─ IoUTracker.update()        identidad estable             RQF05
@@ -31,7 +33,9 @@ from .catalog import (FALL_CLASSES, NONERGO_CLASSES, RISK_CATALOG, RISK_ORDER,
                       SAFE_CLASSES, TAMBALEO_META)
 from .detectors import CocoDetector, PostureDetector
 from .pose import PoseAnalyzer, best_person_match, posture_from_geometry
-from .tracking import IoUTracker
+from .tracking import IoUTracker, iou
+
+BALANCE_RISK = "desequilibrio_pose"
 
 
 def resolve_device(device):
@@ -66,6 +70,15 @@ class RiskEngine:
                                  person_conf=e.person_conf,
                                  person_imgsz=e.person_imgsz)
         self.pose = PoseAnalyzer(enabled=enable_pose)
+        self.skeleton = None
+        self.skeleton_every = max(1, s.skeleton.every)
+        if s.skeleton.enabled and enable_pose:
+            try:
+                from .skeleton import SkeletonAnalyzer
+                self.skeleton = SkeletonAnalyzer(s.skeleton, self.device)
+            except Exception as exc:                        # noqa: BLE001
+                print(f"  [aviso] esqueletos YOLOv8-Pose desactivados: {exc}",
+                      flush=True)
         self.tracker = IoUTracker(iou_match=ps.iou_match,
                                   occlusion_seconds=ps.occlusion_seconds)
         self.alerts = AlertManager(
@@ -76,6 +89,9 @@ class RiskEngine:
             cooldown_seconds=ps.cooldown_seconds,
             keep_days=s.alerts.keep_days, max_images=s.alerts.max_images,
             anonymizer=FaceAnonymizer(enabled=s.privacy.anonymize_faces),
+            # BalanceMonitor ya exige `persist_s`; aquí no se suma más espera.
+            persist_by_risk={BALANCE_RISK: 0.0},
+            cooldown_by_risk={BALANCE_RISK: s.skeleton.balance.cooldown_s},
         )
 
         # --- caches entre fotogramas --------------------------------------
@@ -86,6 +102,7 @@ class RiskEngine:
         self._last_geom: str | None = None
         self._last_landmarks: list | None = None
         self._last_class: tuple | None = None
+        self._last_skeletons: list = []
         # fotogramas seguidos en que un track mantiene "caída" por recorte
         self._fall_held: dict = {}
 
@@ -107,7 +124,10 @@ class RiskEngine:
         self._last_geom = None
         self._last_landmarks = None
         self._last_class = None
+        self._last_skeletons = []
         self._fall_held.clear()
+        if self.skeleton is not None:
+            self.skeleton.reset()
 
     @property
     def has_pending_evidence(self) -> bool:
@@ -183,6 +203,40 @@ class RiskEngine:
             d.pop("_fall_pending", None)
 
     # ------------------------------------------------------------------ #
+    # Esqueletos: pérdida de equilibrio -> caja de persona -> alerta
+    # ------------------------------------------------------------------ #
+    def _link_balance(self, skeletons: list, dets: list, signals: list) -> None:
+        """Lleva cada pérdida de equilibrio del esqueleto a la caja de persona
+        que mejor solapa (la que sigue el IoUTracker y usa AlertManager). Si
+        COCO no vio a esa persona en este fotograma, se añade su caja."""
+        for sk in skeletons:
+            eq = sk.get("equilibrio") or {}
+            if eq.get("estado") != "perdida_equilibrio":
+                continue
+            people = [d for d in dets if d.get("class_id") != 3]
+            best = max(people, key=lambda d: iou(d["bbox"], sk["bbox"]),
+                       default=None)
+            if best is None or iou(best["bbox"], sk["bbox"]) < 0.3:
+                best = {"class_id": 4, "class_name": "Persona",
+                        "confidence": 0.0, "origen": "esqueleto",
+                        "bbox": [int(v) for v in sk["bbox"]], "track_id": None,
+                        "riesgo": "NEUTRO", "ref": ""}
+                dets.append(best)
+                self.tracker.update([best])
+            reason = ", ".join(eq.get("criterios", [])) or "tronco extremo"
+            if best.get("risk_type") != "caida":
+                best["risk_type"] = BALANCE_RISK
+                best["riesgo"] = "ALTO"
+                best["ref"] = f"esqueleto {sk['id']}: {reason}"
+                best["confidence"] = max(best["confidence"], eq.get("score", 0.0))
+            best["esqueleto_id"] = sk["id"]
+            meta = RISK_CATALOG[BALANCE_RISK]
+            signals.append({"tipo": BALANCE_RISK, "conf": eq.get("score", 0.0),
+                            "riesgo": meta["riesgo"], "ref": meta["ref"],
+                            "desc": meta["desc"],
+                            "detalle": f"persona {sk['id']}: {reason}"})
+
+    # ------------------------------------------------------------------ #
     # Pipeline
     # ------------------------------------------------------------------ #
     def step(self, frame: np.ndarray, force: bool = False,
@@ -221,6 +275,17 @@ class RiskEngine:
             except Exception as exc:                        # noqa: BLE001
                 self._fail("pose", exc)
         stages["pose"] = round((time.perf_counter() - t) * 1000, 2)
+
+        # --- 3b. esqueletos YOLOv8-Pose (varias personas, con ID) ---------
+        t = time.perf_counter()
+        if self.skeleton is not None and (due(self.skeleton_every)
+                                          or not self._last_skeletons):
+            try:
+                self._last_skeletons = self.skeleton.step(frame)
+            except Exception as exc:                        # noqa: BLE001
+                self._fail("pose", exc)
+        skeletons = self._last_skeletons
+        stages["skeleton"] = round((time.perf_counter() - t) * 1000, 2)
 
         pose_signals = []
         for person in pose:
@@ -314,6 +379,7 @@ class RiskEngine:
         # --- 6. seguimiento + confirmación de caídas ----------------------
         self.tracker.update(dets)
         self._confirm_falls(dets)
+        self._link_balance(skeletons, dets, pose_signals)
         for conf_s, box in stairs:
             dets.append({
                 "class_id": 3, "class_name": "escalera",
@@ -369,6 +435,7 @@ class RiskEngine:
             "confirmadas": len(confirmed),
             "preliminares": len(preliminary),
             "postura": pose_signals,
+            "esqueletos": skeletons,
             "obstaculos": obstacles,
             "alertas": self.alerts.recent(5),
             "riesgo": level,

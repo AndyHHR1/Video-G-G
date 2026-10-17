@@ -333,6 +333,23 @@ function riskPanels(d) {
   h += '</div>';
   const col = d.sistema === 'OPERATIVO' ? '#3fb85a'
             : d.sistema === 'DEGRADADO' ? '#f2a83c' : '#e03c3c';
+  // Esqueletos YOLOv8-Pose: métricas por persona
+  const sks = (d.esqueletos || []).filter(x => x.id != null);
+  if (d.esqueletos) {
+    const f = (v, u='') => v == null ? '—' : `${v}${u}`;
+    h += `<div class="card" style="margin-bottom:12px">
+      <h2>Esqueletos · YOLOv8-Pose · RQF02 (4)</h2>`;
+    h += sks.length ? '<table><tr><th>ID</th><th>Estado</th><th>Tronco</th><th>Cadera</th><th>CdM</th></tr>' +
+      sks.map(x => { const m = x.metricas || {}, e = x.equilibrio || {};
+        const col = e.estado === 'perdida_equilibrio' ? 'var(--alto)' : e.estado === 'inestable' ? 'var(--medio)' : 'var(--bajo)';
+        return `<tr title="${(e.criterios||[]).join(', ') || 'sin criterios activos'}">
+          <td>P${x.id}</td><td style="color:${col}">${(e.estado||'').replace(/_/g,' ')}</td>
+          <td>${f(m.tronco_deg,'°')}${e.desvio_tronco_deg != null ? ` (Δ${e.desvio_tronco_deg}°)` : ''}</td>
+          <td>${f(m.cadera_baja_v)} t/s</td><td>${f(m.com_offset)}</td></tr>`; }).join('') + '</table>' +
+      '<div class="req" style="margin-top:6px">t/s = torsos por segundo (hacia abajo) · CdM = centro de masa fuera de los pies, en torsos</div>'
+      : '<div class="req">Sin esqueletos con identidad.</div>';
+    h += '</div>';
+  }
   h += `<div class="card"><h2>Estado del sistema · RQNF09</h2>
     <div class="stat"><span>Estado</span><b style="color:${col}">${d.sistema}</b></div>
     <div class="stat"><span>Identidades seguidas</span><b>${d.tracks||0}</b></div>
@@ -420,6 +437,7 @@ function drawBoxes(src, dst, d) {
     c.fillStyle = '#141414';
     c.fillText(t, x1+4, Math.max(12,y1-4));
   }
+  drawSkeletons(c, dst, d.esqueletos || []);
   // banda de estado
   c.fillStyle = 'rgba(30,30,30,0.85)';
   c.fillRect(0,0,dst.width,40);
@@ -428,6 +446,51 @@ function drawBoxes(src, dst, d) {
   c.fillStyle = RISK_COLOR[d.summary.level] || '#dcdcdc';
   c.font='bold 13px system-ui,sans-serif';
   c.fillText(`Riesgo: ${d.summary.level}`, 10, 34);
+}
+
+// Esqueletos YOLOv8-Pose (coordenadas 0..1). Huesos por grupo; un punto
+// relleno = visto, hueco = mantenido mientras el pasamanos lo tapa. En rojo
+// la persona con pérdida de equilibrio; en naranja, inestable.
+const BONES = {cabeza:[[0,1],[0,2],[1,3],[2,4],[3,5],[4,6]], brazos:[[5,7],[7,9],[6,8],[8,10]],
+               tronco:[[5,6],[5,11],[6,12],[11,12]], piernas:[[11,13],[13,15],[12,14],[14,16]]};
+const BONE_COLOR = {cabeza:'#50c8ff', brazos:'#ffdc50', tronco:'#ffffff', piernas:'#78ff78'};
+const SK_STATE = {perdida_equilibrio:'#e03c3c', inestable:'#f2a83c'};
+function drawSkeletons(c, dst, sks) {
+  const W = dst.width, H = dst.height;
+  for (const sk of sks) {
+    const k = sk.kps || []; if (!k.length) continue;
+    const st = (sk.equilibrio || {}).estado || '';
+    const alarm = SK_STATE[st];
+    c.lineWidth = 2;
+    for (const [g, bones] of Object.entries(BONES)) {
+      c.strokeStyle = alarm || BONE_COLOR[g];
+      for (const [a, b] of bones) {
+        if (!k[a][3] || !k[b][3]) continue;
+        c.setLineDash(k[a][3] === 2 || k[b][3] === 2 ? [4, 3] : []);
+        c.beginPath(); c.moveTo(k[a][0]*W, k[a][1]*H); c.lineTo(k[b][0]*W, k[b][1]*H); c.stroke();
+      }
+    }
+    c.setLineDash([]);
+    for (const [x, y, _c, v] of k) {
+      if (!v) continue;
+      c.beginPath(); c.arc(x*W, y*H, 3, 0, 2*Math.PI);
+      if (v === 1) { c.fillStyle = alarm || '#00ffff'; c.fill(); }
+      else { c.strokeStyle = alarm || '#00ffff'; c.lineWidth = 1; c.stroke(); c.lineWidth = 2; }
+    }
+    if (sk.com) {
+      const cx = sk.com[0]*W, cy = sk.com[1]*H;
+      c.strokeStyle = alarm || '#ff50ff';
+      c.beginPath(); c.moveTo(cx-6, cy); c.lineTo(cx+6, cy); c.moveTo(cx, cy-6); c.lineTo(cx, cy+6); c.stroke();
+    }
+    if (sk.id != null) {
+      const m = sk.metricas || {};
+      let t = `P${sk.id}` + (m.tronco_deg != null ? ` ${Math.round(m.tronco_deg)}°` : '');
+      if (st === 'perdida_equilibrio') t += ' ¡DESEQUILIBRIO!';
+      c.font = 'bold 12px system-ui,sans-serif';
+      c.fillStyle = alarm || '#00ffff';
+      c.fillText(t, sk.bbox[0]*W, Math.max(12, sk.bbox[1]*H - 20));
+    }
+  }
 }
 
 // ---------- camara del navegador ----------

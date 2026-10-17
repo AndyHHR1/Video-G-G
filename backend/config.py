@@ -105,9 +105,69 @@ class CameraCfg:
     reconnect_attempts: int = 5
 
 
+@dataclass
+class SkeletonKeypointsCfg:
+    conf_min: float = 0.45         # puntos por debajo se descartan
+    hold_s: float = 0.6            # mantener un punto tapado (pasamanos)
+    max_jump_torso: float = 1.2    # salto imposible entre fotogramas
+
+
+@dataclass
+class SkeletonSmoothingCfg:        # filtro One Euro + derivadas
+    min_cutoff: float = 1.0
+    beta: float = 1.5
+    d_cutoff: float = 1.0
+    velocity_alpha: float = 0.5
+
+
+@dataclass
+class SkeletonPerspectiveCfg:
+    nadir: Any = None              # [x, y] normalizados: donde convergen las verticales
+
+
+@dataclass
+class BalanceCfg:
+    trunk_abs_deg: float = 35.0
+    trunk_dev_deg: float = 25.0
+    trunk_extreme_deg: float = 55.0
+    baseline_s: float = 3.0
+    baseline_min_samples: int = 8
+    hip_down_speed: float = 2.0    # torsos/s
+    hip_accel: float = 8.0         # torsos/s²
+    head_accel: float = 10.0       # torsos/s²
+    com_margin: float = 0.35       # torsos fuera de la base de apoyo
+    feet_pad: float = 0.15         # ancho de medio pie a cada lado del tobillo
+    min_votes: int = 2
+    persist_s: float = 0.25
+    cooldown_s: float = 10.0
+    min_torso_px: float = 24.0
+
+
+@dataclass
+class SkeletonCfg:
+    enabled: bool = True
+    model: str = "models/pose/yolov8s-pose.pt"
+    imgsz: int = 640
+    conf: float = 0.30
+    iou: float = 0.6
+    every: int = 2
+    tracker: str = "configs/tracker_esqueletos.yaml"
+    min_keypoints: int = 5
+    forget_s: float = 3.0
+    morphology: str = "off"        # off | mascara
+    keypoints: SkeletonKeypointsCfg = field(default_factory=SkeletonKeypointsCfg)
+    smoothing: SkeletonSmoothingCfg = field(default_factory=SkeletonSmoothingCfg)
+    perspective: SkeletonPerspectiveCfg = field(default_factory=SkeletonPerspectiveCfg)
+    balance: BalanceCfg = field(default_factory=BalanceCfg)
+    # rutas absolutas, rellenadas por Settings
+    model_path: Any = None
+    tracker_path: Any = None
+
+
 def _baja_vram_default() -> dict:
     return {"enhancement.half": False,
-            "enhancement.live.input_max": 320}
+            "enhancement.live.input_max": 320,
+            "skeleton.every": 3}
 
 
 @dataclass
@@ -148,6 +208,7 @@ class Settings:
     enhancement: EnhancementCfg = field(default_factory=EnhancementCfg)
     camera: CameraCfg = field(default_factory=CameraCfg)
     hardware: HardwareCfg = field(default_factory=HardwareCfg)
+    skeleton: SkeletonCfg = field(default_factory=SkeletonCfg)
     modules: ModulesCfg = field(default_factory=ModulesCfg)
 
     # --- rutas absolutas ------------------------------------------------
@@ -170,6 +231,16 @@ class Settings:
     @property
     def alerts_dir(self) -> Path:
         return self.path(self.alerts.dir)
+
+    def __post_init__(self):
+        self.resolve_paths()
+
+    def resolve_paths(self) -> None:
+        sk = self.skeleton
+        sk.model_path = self.path(sk.model)
+        tr = Path(sk.tracker)
+        # «bytetrack.yaml» / «botsort.yaml» sin carpeta: los de Ultralytics
+        sk.tracker_path = self.path(tr) if tr.parent != Path(".") else tr
 
 
 # --------------------------------------------------------------------------- #
@@ -212,4 +283,6 @@ def load_settings(path: str | Path | None = None,
         data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
     for item in overrides or []:
         _apply_override(data, item)
-    return _build(Settings, data)
+    settings = _build(Settings, data)
+    settings.resolve_paths()
+    return settings

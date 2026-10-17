@@ -103,3 +103,24 @@ Desviaciones conscientes:
   `.mp3`, …): el pedido es que el sistema no reciba vídeos.
 - **RQNF22** (vídeo pregrabado) queda retirado por pedido del cliente; un vídeo
   grabado se puede seguir reproduciendo como cámara RTSP por `/api/stream`.
+
+## 6. Esqueletos con YOLOv8-Pose y pérdida de equilibrio
+
+Escena objetivo: cámara alta en diagonal, varias personas, pasamanos que tapa.
+No se reentrenó nada: `yolov8s-pose.pt` es el preentrenado público.
+
+| Decisión | Por qué |
+|---|---|
+| YOLOv8s-Pose **además** de MediaPipe | MediaPipe da una persona por fotograma; YOLOv8-Pose da todas. MediaPipe se conserva para pasamanos y distracción. `s` y no `n`: en vista picada las personas lejanas son pequeñas. |
+| ByteTrack de Ultralytics (y no el IoUTracker propio) para los esqueletos | Su filtro de Kalman predice la posición durante la oclusión del pasamanos o de otra persona. Requiere `lap` (añadido a `base.txt`: si falta, Ultralytics intenta instalarlo en plena ejecución). |
+| Fusionar mitades superior/inferior | Un pasamanos sintético partió a 4 personas en 6 detecciones. |
+| One Euro en vez de media móvil | Suaviza en reposo y casi no retrasa los movimientos bruscos que interesan. |
+| Unidades en torsos | La vista picada cambia el tamaño aparente con la distancia; las velocidades en píxeles no serían comparables. |
+| Línea base del tronco por persona (+ nadir opcional) | La perspectiva inclina en la imagen a personas que están verticales. |
+| ≥ 2 criterios sostenidos 0.25 s | Bajar deprisa o agacharse activan uno solo. Prueba sintética: caída detectada a ~0.33 s; bajada rápida con margen (1.2 frente a 2.0 torsos/s). |
+| Morfología omitida | Medida: efecto mixto y pequeño sobre la confianza de los puntos (tabla en `skeleton/morphology.py`); `tools/eval_morfologia_pose.py` permite repetirlo con el vídeo real. |
+| Perfil GTX 1650: `skeleton.every: 3` | ~26 ms por pasada; a 10 Hz las velocidades siguen siendo fiables porque usan el tiempo real entre fotogramas. |
+
+Pendiente: calibrar los umbrales de `skeleton.balance` con grabaciones reales
+de la escalera (las pruebas son sintéticas) y, si es posible, medir el nadir
+de la cámara instalada.

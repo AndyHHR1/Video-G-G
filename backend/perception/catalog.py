@@ -81,6 +81,12 @@ RISK_CATALOG: dict[str, dict] = {
         "n": 4, "riesgo": "ALTO", "ref": "RQF02 (4)",
         "desc": "Caída activa o pérdida inminente de equilibrio.",
     },
+    "desequilibrio_pose": {
+        "n": 4, "riesgo": "ALTO", "ref": "RQF02 (4) · esqueleto YOLOv8-Pose",
+        "desc": "Pérdida de equilibrio medida en el esqueleto: inclinación del "
+                "tronco, centro de masa fuera de los pies y velocidad o "
+                "aceleración brusca de cadera y cabeza.",
+    },
     "caida": {
         "n": 4, "riesgo": "ALTO", "ref": "RQF02 (4) · RQNF05",
         "desc": "Persona caída en el suelo.",

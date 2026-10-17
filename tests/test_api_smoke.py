@@ -88,6 +88,13 @@ class ApiSmokeTest(unittest.TestCase):
         boxes = [x["bbox"] for x in d["detections"] if "bbox" in x]
         self.assertTrue(boxes)
         self.assertTrue(all(0 <= v <= 1 for b in boxes for v in b))
+        # Esqueletos YOLOv8-Pose: 17 puntos normalizados por persona, con ID.
+        sks = [x for x in d.get("esqueletos", []) if x.get("id") is not None]
+        self.assertTrue(sks, "sin esqueletos con identidad")
+        self.assertEqual(len(sks[0]["kps"]), 17)
+        self.assertTrue(all(0 <= k[0] <= 1 and 0 <= k[1] <= 1
+                            for sk in sks for k in sk["kps"] if k[3]))
+        self.assertIn("tronco_deg", sks[0]["metricas"])
         # El módulo Imagen lee (sin alterar) el último fotograma en vivo.
         f = self.client.get("/api/imagen/caracteristicas").get_json()
         self.assertEqual(f["schema_version"], "imagen-0.1.0")

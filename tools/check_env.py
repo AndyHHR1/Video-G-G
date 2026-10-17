@@ -50,7 +50,8 @@ except Exception as exc:                                    # noqa: BLE001
     line(False, f"torch no importa: {exc}")
 
 for mod, want in (("numpy", "1.26"), ("cv2", "4.10"), ("mediapipe", "0.10.21"),
-                  ("ultralytics", "8.4"), ("flask", None), ("yaml", None)):
+                  ("ultralytics", "8.4"), ("flask", None), ("yaml", None),
+                  ("lap", None)):
     try:
         m = importlib.import_module(mod)
         ver = getattr(m, "__version__", None) if mod != "flask" else None

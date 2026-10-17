@@ -8,6 +8,7 @@ Modelos:
   * models/detector/escaleras_s7_v4.pt  "Modelo S7 v4" (release del proyecto)
   * models/coco/yolov8s.pt              YOLOv8s COCO (Ultralytics)
   * models/sr/realesr-general-x4v3.pth  Real-ESRGAN compacto (vídeo en vivo)
+  * models/pose/yolov8{s,n}-pose.pt     YOLOv8-Pose (esqueletos y equilibrio)
   * models/imagen/yolo11n.pt            YOLO11n (módulo Imagen)
   * models/imagen/yolo11n-pose.pt       YOLO11n-Pose (módulo Imagen)
   * modulos/audio/.../fall_classifier.joblib  MLP acústico (módulo Audio)
@@ -52,6 +53,20 @@ MODELS = [
         "url": "https://github.com/xinntao/Real-ESRGAN/releases/download/"
                "v0.2.5.0/realesr-general-x4v3.pth",
         "desc": "Real-ESRGAN general x4 v3 (vídeo en vivo)",
+    },
+    {
+        "path": "models/pose/yolov8s-pose.pt",
+        "sha256": "234314cd8baf62616791aceb9ea6ad5c19f26cf6c0d8f3a1bfce1e23b186cfb3",
+        "url": "https://github.com/ultralytics/assets/releases/download/"
+               "v8.3.0/yolov8s-pose.pt",
+        "desc": "YOLOv8s-Pose (esqueletos: 17 puntos por persona)",
+    },
+    {
+        "path": "models/pose/yolov8n-pose.pt",
+        "sha256": "c6fa93dd1ee4a2c18c900a45c1d864a1c6f7aba75d84f91648a30b7fb641d212",
+        "url": "https://github.com/ultralytics/assets/releases/download/"
+               "v8.3.0/yolov8n-pose.pt",
+        "desc": "YOLOv8n-Pose (alternativa más rápida, skeleton.model)",
     },
     {
         "path": "models/imagen/yolo11n.pt",
