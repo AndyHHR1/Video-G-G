@@ -211,7 +211,7 @@
           <label title="Con SR el live sube a ~0.8-1.2 s/frame (≈1 fps). Sin SR el live es fluido a 30 fps con cajas frescas; el SR 4× se aplica en uploads o con este toggle (lento, con retardo).">
             <input type="checkbox" id="fast"> SR en vivo (≈4 fps)
           </label>
-        </div>
+         </div>
         <div class="stage" id="scam">
           <div class="placeholder">Pulsa «Conectar webcam» para usar la cámara de este equipo</div>
         </div>
@@ -318,7 +318,7 @@ function riskPanels(d) {
   h += `<div class="card" style="margin-bottom:12px">
     <h2>Obstáculos en la escalera · RQF02 (1)</h2>`;
   h += obs.length
-    ? '<table>' + obs.map(o=>`<tr><td>${o.objeto}</td><td>${(o.conf*100).toFixed(0)}%</td>
+    ? '<table>' + obs.map(o=>`<tr><td>${o.objeto}</td>
         <td class="req">${o.tipo === 'telefono' ? 'RQF02 (3) móvil'
             : o.riesgo === 'ALTO' ? 'obstáculo' : 'escena'}</td></tr>`).join('') + '</table>'
     : '<div class="req">Ningún objeto detectado sobre el escalón.</div>';
@@ -329,7 +329,7 @@ function riskPanels(d) {
     <h2>Postura yTransitSafe · RQF02 (2)(3)</h2>`;
   h += pos.length
     ? '<table>' + pos.map(p=>`<tr><td>${p.tipo.replace(/_/g,' ')}</td>
-        <td>${(p.conf*100).toFixed(0)}%</td><td>${p.ref}</td></tr>`).join('') + '</table>'
+        <td>${p.ref}</td></tr>`).join('') + '</table>'
     : '<div class="req">Sin señales de pasamanos, distracción ni tambaleo.</div>';
   h += '</div>';
   // RQF07 alertas
@@ -369,7 +369,7 @@ function detTable(dets) {
     const caja = Array.isArray(d.bbox)
       ? d.bbox.join(', ')
       : '<span class="req">' + (d.ref || '—') + '</span>';
-    h += `<tr><td>${nombre}</td><td>${(conf * 100).toFixed(0)}%</td>
+    h += `<tr><td>${nombre}</td>
           <td>${d.risk || '—'}</td><td class="req">${caja}</td></tr>`;
   }
   return h + '</table>';
@@ -461,8 +461,14 @@ function drawBoxes(src, dst, d) {
    // a 960 px (nítigo: downsampling bilineal). Antes, establecer dst.width =
    // src.width hacía que el lienzo cambiara de tamaño entre frames y entre
    // modos, y el video "saltaba" al reconstruir el backing store.
-  const c = dst.getContext('2d');
-  c.drawImage(src, 0, 0, dst.width, dst.height);
+   const c = dst.getContext('2d');
+   // Mejora visual para poca luz (low-light) en el DISPLAY solo: brillo/
+   // contraste/saturación (filtro 2D canvas, GPU, ~0 coste). El servidor recibe
+   // el frame original (sin filtro) → sin falsos positivos. Se resetea tras
+   // pintar la imagen para que cajas y texto queden nítidos.
+   c.filter = 'brightness(1.08) contrast(1.10) saturate(1.05)';
+   c.drawImage(src, 0, 0, dst.width, dst.height);
+   c.filter = 'none';
   for (const b of d.detections) {
     // las señales de postura no tienen caja: no se dibuja rectángulo
     if (!b.bbox) {
@@ -478,7 +484,7 @@ function drawBoxes(src, dst, d) {
     const x2 = b.bbox[2]*dst.width, y2 = b.bbox[3]*dst.height;
     c.strokeStyle = col; c.lineWidth = 2;
     c.strokeRect(x1, y1, x2-x1, y2-y1);
-    const t = `${b.class_name} ${(b.confidence*100).toFixed(0)}%`;
+    const t = `${b.class_name}`;
     c.font = '13px system-ui,sans-serif';
     const tw = c.measureText(t).width;
     c.fillStyle = col;
@@ -503,6 +509,14 @@ function drawBoxes(src, dst, d) {
 // vuelo: encolarlas acumularia retraso y el panel mostraria frames viejos.
 let _estadoGlobal = 'DESCONOCIDO';
 let cam = { on:false, stream:null, busy:false, last:0, sent:0, err:null, ok:false, video:null, fps:0, t0:0, intentos:0 };
+// Sync caja/video: el server devuelve `frame_id` (el id del frame que analizó
+// realmente, del caché async). El cliente guarda los últimos blobs en un buffer
+// y dibuja las cajas sobre ESE frame, no sobre el vivo: con el retardo async
+// (~100-200 ms) las cajas cuadran perfecto (antes marcaban sobre el frame vivo
+// y, si la persona se movía, "caían en sitios que no pertenecen").
+let frameSeq = 0;
+const frameBuffer = new Map();
+const FRAME_BUFFER_MAX = 10;
 let audioEl = null;  // <audio> para playback local del micrófono
 
 function stopCam() {
@@ -704,15 +718,29 @@ $('#bcam').onclick = async () => {
       // quedaba pequeño (2/3 del ancho) y estirarlo con CSS pixelaba el video.
       let w = cv.width, h = cv.height;
       if (w > LIVE_W) { h = Math.round(h * LIVE_W / w); w = LIVE_W; }
+      // Se envía al servidor el frame NATIVO (sin filtro): realzar brillo/contraste
+      // antes de detectar infla ruido y genera falsos positivos ("cajas donde no
+      // hay nada"). La mejora visual va SOLO en el display (drawBoxes), no en la
+      // detección.
       if (w !== cv.width) {
         small.width = w; small.height = h;
         sctx.drawImage(cv, 0, 0, w, h);
       } else { small.width = w; small.height = h; sctx.drawImage(cv, 0, 0); }
       const blob = await new Promise(res => {
-        const t = setTimeout(() => res(null), 500);  // safety: 500ms timeout
+        const t = setTimeout(() => res(null), 1000);  // safety: 1s timeout
         small.toBlob(b => { clearTimeout(t); res(b); }, 'image/jpeg', 0.8);
       });
-      if (!blob) throw new Error('el canvas no se pudo convertir en imagen');
+      // En live async un frame caído no es problema: el siguiente tick refresca.
+      // No se lanza error (antes el safety-timeout a 500ms mostraba
+      // "el canvas no se pudo convertir en imagen" de forma intermitente).
+      if (!blob) return;
+      // Tag de secuencia + buffer: se guarda el blob para poder dibujar las
+      // cajas sobre el frame que el motor analizó (ver drawBoxes más abajo).
+      const fid = ++frameSeq;
+      frameBuffer.set(String(fid), blob);
+      while (frameBuffer.size > FRAME_BUFFER_MAX) {
+        frameBuffer.delete(frameBuffer.keys().next().value);
+      }
       // Cuerpo binario crudo: evita el parser multipart de Werkzeug, que
       // con un JPEG de ~50 KB costaba ~17 ms por fotograma. A 960 px el
       // blob pesa ~12 KB y el envío + decode quedan por debajo de 5 ms.
@@ -721,9 +749,10 @@ $('#bcam').onclick = async () => {
       // SR+cajas a 30 fps (se permite retardo). Se purga el frame-by-frame.
       const sr = $('#fast').checked ? 1 : 0;
       const r = await fetch('/api/frame?conf=' + $('#ccam').value +
-          '&overlay=0&sync=0&sr=' + sr,
-          {method:'POST', headers:{'Content-Type':'image/jpeg'}, body: blob});
+          '&overlay=0&sync=0&sr=' + sr + '&fid=' + fid,
+        {method:'POST', headers:{'Content-Type':'image/jpeg'}, body: blob});
       const d = await readJson(r);
+
       if (d.error) throw new Error(d.error);
       // En modo SR on-demand (checkbox SR en vivo) el servidor devuelve
       // el frame super-resuelto 4× como `image` en base64: se dibuja ese
@@ -736,7 +765,18 @@ $('#bcam').onclick = async () => {
         const b64 = /^[0-9a-f]+$/i.test(d.image) ? hexToB64(d.image) : d.image;
         img.src = 'data:image/jpeg;base64,' + b64;
       } else {
-        drawBoxes(small, disp, d);
+        // Sin SR: dibujar sobre el frame que el motor ANALIZÓ (d.frame_id), no
+        // sobre el vivo, para que las cajas cuadren aun con el retardo async.
+        const fid = d.frame_id != null ? String(d.frame_id) : null;
+        if (fid != null && frameBuffer.has(fid)) {
+          const b = frameBuffer.get(fid);
+          frameBuffer.delete(fid);
+          const img = new Image();
+          img.onload = () => { drawBoxes(img, disp, d); URL.revokeObjectURL(img.src); };
+          img.src = URL.createObjectURL(b);
+        } else {
+          drawBoxes(small, disp, d);
+        }
       }
       $('#camrisk').innerHTML = riskBox(d.summary) + `
           <div class="stat"><span>Inferencia</span><b>${d.timing.predict} ms</b></div>
@@ -807,7 +847,7 @@ async function cargarAlertas() {
         <div class="alert-tipo">${(a.risk_type||'').replace(/_/g,' ')}
           <span class="badge">${SEV_TXT[a.severity]||a.severity}</span></div>
         <div class="alert-meta">${(a.timestamp||'').replace('T',' ')} · ${a.duration_s}s ·
-          id ${a.track_id} · conf ${((a.confidence||0)*100).toFixed(0)}%</div>
+           id ${a.track_id}</div>
         <div class="alert-meta">${a.risk_ref||''}</div>
         ${a.description ? `<div class="alert-desc">${a.description}</div>` : ''}
       </div>

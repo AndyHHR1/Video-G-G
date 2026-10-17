@@ -226,6 +226,18 @@ class RiskEngine:
     # encuadre entero y no llegaba a considerar a la persona.
     MAX_STAIRS_BOXES = 2
 
+    # --- Mitigacion de falsos ALTO en personas de pie (RQF02 2/3) ----------
+    # El clasificador por recorte (6 clases) es debil: en test `persona` mAP50=0.49
+    # y `persona_caido` prácticamente no aprende, de modo que clasifica a una
+    # persona de pie como `persona_caido` y lo marca ALTO. La geometría de pose
+    # (MediaPipe) es confiable (caído 93%, de pie 88%) y se aplica directamente;
+    # el recorte solo entra cuando no hay pose. Para el recorte exigimos:
+    #   * confianza >= FALL_CROP_CONF (filtra el ruido de 0.20-0.49),
+    #   * confirmación temporal (FALL_CONFIRM_N frames seguidos, mismo track_id),
+    #   * mientras tanto, MEDIO "REVISAR" en vez de ALTO (Claude/req: no saltar a NEUTRO).
+    FALL_CROP_CONF = 0.50
+    FALL_CONFIRM_N = 3
+
     def __init__(
         self,
         risk_weights: str,
@@ -337,6 +349,11 @@ class RiskEngine:
         self._fallos_deteccion = 0
         self._camara_connected = False
         self._estado_manual = None
+
+        # Contador de fotogramas consecutivos en los que un track_id mantiene
+        # una clasificacion de caida POR RECORTE (origen "modelo"). La
+        # geometria de pose no la usa: esa senal ya es ALTO directamente.
+        self._fall_held: dict = {}
 
         # El seguimiento es IoU handmade (ver `_track`), no ByteTrack: se
         # descarto porque arrastra estado interno entre llamadas de forma
@@ -507,7 +524,8 @@ class RiskEngine:
     def _obstacles(self, image: np.ndarray) -> list[dict]:
         """Detecta objetos abandonados sobre la escalera con un modelo COCO."""
         res = self.obs.predict(
-            image, conf=CONF_OBSTACLE, iou=0.5, device=self.device, verbose=False
+            image, conf=CONF_OBSTACLE, iou=0.5, device=self.device,
+            verbose=False
         )[0]
         out = []
         if res.boxes is None:
@@ -874,6 +892,55 @@ class RiskEngine:
         self._last_class = None
         self._last_tambaleo = False
         self._last_pose_landmarks = None
+        self._fall_held.clear()
+
+    def _confirm_caida(self, dets: list[dict]) -> list[dict]:
+        """Promueve a ALTO las caídas del clasificador por recorte SOLO si se
+        confirman temporalmente (FALL_CONFIRM_N fotogramas seguidos, mismo
+        track_id).
+
+        La geometría de pose (origen "geometria de pose") ya salió directamente
+        a ALTO porque es confiable; a sus detecciones NO las toca este método
+        (`_fall_confirmado=False`). El recorte sin pose, que es el que produce
+        los falsos ALTO en personas de pie (mAP50 de `persona` 0.49 en test),
+        pasa de "MEDIO REVISAR" a "ALTO" únicamente al superar el umbral de
+        confianza (FALL_CROP_CONF, aplicado en el bucle de clasificación) y al
+        mantenerse caído los N frames consecutivos. Un parpadeo aislado se
+        queda en MEDIO y no dispara alerta.
+        """
+        # incrementar contadores por identidad
+        for d in dets:
+            if not d.get("_fall_confirmado"):
+                continue
+            tid = d.get("track_id")
+            if tid is None:
+                continue
+            self._fall_held[tid] = self._fall_held.get(tid, 0) + 1
+        # promover / mantener
+        presentes = set()
+        for d in dets:
+            if not d.get("_fall_confirmado"):
+                continue
+            tid = d.get("track_id")
+            presentes.add(tid)
+            if tid is None:
+                # sin track estable, no se puede contar: MEDIO de todos modos
+                d["riesgo"] = "MEDIO"
+                continue
+            held = self._fall_held.get(tid, 0)
+            if held >= self.FALL_CONFIRM_N:
+                d["riesgo"] = "ALTO"
+                d["ref"] = (f"caída confirmada ({held} frames, "
+                            f"modelo {d['confidence']:.2f})")
+            # else: MEDIO "REVISAR" (ya puesto en el bucle de clasificación)
+        # olvidar identidades que no aparecen este frame: reinicia la cuenta
+        for tid in list(self._fall_held.keys()):
+            if tid not in presentes:
+                self._fall_held.pop(tid, None)
+        # limpiar marcador interno antes de serializar
+        for d in dets:
+            d.pop("_fall_confirmado", None)
+        return dets
 
     def get_traces(self) -> dict | None:
         pass
@@ -931,8 +998,7 @@ class RiskEngine:
         """
         res = self.obs.predict(
             frame, conf=self.person_conf, iou=0.5, imgsz=self.person_imgsz,
-            device=self.device, verbose=False
-        )[0]
+            device=self.device, verbose=False        )[0]
         out = []
         if res.boxes is None:
             return out
@@ -988,6 +1054,7 @@ class RiskEngine:
         """
         t0 = time.perf_counter()
         self._last_frame = frame
+        stages: dict = {}
 
         self._frame_no = getattr(self, "_frame_no", 0) + 1
         run_extras = force or (self._frame_no % max(1, self.pose_every)) == 0
@@ -1011,14 +1078,17 @@ class RiskEngine:
         people = self._find_people(frame) if (run_people or not self._last_people) \
             else self._last_people
         self._last_people = people
+        stages["people"] = round((time.perf_counter() - t0) * 1000, 2)
 
         # --- escalera, con tope de cajas y cadencia lenta ---
         # `escalera` es clase de CONTEXTO y no cambia entre fotogramas, pero
         # su deteccion cuesta 19 ms: la mitad del presupuesto. Se reutiliza la
         # ultima caja como con los obstaculos.
+        t_stairs = time.perf_counter()
         if run_stairs or not self._last_stairs:
             res_s = self.det.predict(
-                frame, conf=0.30, iou=0.6, device=self.device, verbose=False
+                frame, conf=0.30, iou=0.6, device=self.device,
+                verbose=False
             )[0]
             found = []
             if res_s.boxes is not None:
@@ -1029,6 +1099,7 @@ class RiskEngine:
             found.sort(reverse=True)
             self._last_stairs = found[:self.MAX_STAIRS_BOXES]
         stairs = self._last_stairs
+        stages["stairs"] = round((time.perf_counter() - t_stairs) * 1000, 2)
 
         # --- postura (RQF02 2 y 3) ---
         # La pose y los obstaculos usan cadencias PROPIAS y distintas entre si
@@ -1040,6 +1111,7 @@ class RiskEngine:
         # La pose va envuelta: si falla, se pierde la señal de postura pero el
         # fotograma sigue produciendo detecciones y obstaculos. Antes un
         # TypeError aqui tumbaba `step()` entero y el endpoint devolvia 500.
+        t_pose = time.perf_counter()
         pose = []
         if run_extras:
             try:
@@ -1052,6 +1124,7 @@ class RiskEngine:
                           f"{type(exc).__name__}: {exc}", flush=True)
         else:
             pose = []
+        stages["pose"] = round((time.perf_counter() - t_pose) * 1000, 2)
         pose_signals = []
         for person in pose:
             for s in person["signals"]:
@@ -1065,6 +1138,7 @@ class RiskEngine:
                     })
 
         # --- obstaculos (RQF02 1) ---
+        t_obs = time.perf_counter()
         if run_obstacles:
             try:
                 self._last_obstacles = self._obstacles(frame)
@@ -1075,6 +1149,7 @@ class RiskEngine:
                     print(f"  [aviso] deteccion de obstaculos fallo: "
                           f"{type(exc).__name__}: {exc}", flush=True)
         obstacles = self._last_obstacles
+        stages["obstacles"] = round((time.perf_counter() - t_obs) * 1000, 2)
 
         # --- clasificacion de postura de cada persona ---
         #
@@ -1123,12 +1198,13 @@ class RiskEngine:
 
         run_class = ((self._frame_no % max(1, self.classify_every)) == 0
                      or self._last_class is None)
+        t_class = time.perf_counter()
         for i, box in enumerate(people):
             es_la_pose = geom is not None and i == pose_idx
             if es_la_pose:
                 name, conf_p, origen = geom, 0.55, "geometria de pose"
             elif run_class or not self._last_class \
-                    or abs(self._last_class[0][0] - box[0]) > 24:
+                    or abs(self._last_class[0][0] - box[0]) > 64:
                 name, conf_p = self._classify_person(frame, box)
                 self._last_class = (tuple(box), name, conf_p)
                 origen = "modelo"
@@ -1154,9 +1230,28 @@ class RiskEngine:
                 "riesgo": "NEUTRO", "ref": "",
             }
             if name in FALL_CLASSES:
-                det["riesgo"] = RISK_CATALOG[FALL_CLASSES[name]]["riesgo"]
-                det["ref"] = RISK_CATALOG[FALL_CLASSES[name]]["ref"]
                 det["risk_type"] = FALL_CLASSES[name]
+                # Geometria de pose: senal confiable -> caida directa a ALTO.
+                if es_la_pose:
+                    det["riesgo"] = RISK_CATALOG[det["risk_type"]]["riesgo"]
+                    det["ref"] = RISK_CATALOG[det["risk_type"]]["ref"]
+                    det["_fall_confirmado"] = False
+                else:
+                    # Recorte sin pose: modelo 6-clase debil (mAP50 persona=0.49
+                    # en test, caida casi sin aprender). Exigimos confianza >= 0.50
+                    # y confirmacion temporal (ver _confirm_caida) antes de ALTO;
+                    # hasta entonces MEDIO "REVISAR" (no NEUTRO: la senal existe,
+                    # pero no se confirma) para no perder una caida real.
+                    if conf_p < self.FALL_CROP_CONF:
+                        det["riesgo"] = "MEDIO"
+                        det["ref"] = (f"REVISAR (modelo {conf_p:.2f} < "
+                                       f"{self.FALL_CROP_CONF}, sin pose)")
+                        det["_fall_confirmado"] = False
+                    else:
+                        det["riesgo"] = "MEDIO"
+                        det["ref"] = (f"caída? modelo {conf_p:.2f} "
+                                       "(sin pose, confirmar)")
+                        det["_fall_confirmado"] = True
             elif name in NONERGO_CLASSES:
                 det["riesgo"] = "MEDIO"
                 det["ref"] = "RQF03"
@@ -1165,6 +1260,8 @@ class RiskEngine:
                 det["riesgo"] = "BAJO"
                 det["ref"] = "RQF03"
             dets.append(det)
+        stages["classify"] = round((time.perf_counter() - t_class) * 1000, 2)
+
 
         # Las señales de postura PERTENECEN a la persona a la que describe la
         # pose, que es la caja con la que se emparejo. Antes solo sumaban al
@@ -1187,6 +1284,7 @@ class RiskEngine:
                 d["riesgo_por_clase"] = actual
 
         dets = self._track(dets)
+        dets = self._confirm_caida(dets)
         for conf_s, box in stairs:
             dets.append({
                 "class_id": 3, "class_name": "escalera",
@@ -1258,6 +1356,7 @@ class RiskEngine:
 
         # --- estado del sistema (RQNF09, RQNF26) ---
         ms = (time.perf_counter() - t0) * 1000
+        stages["total"] = round(ms, 1)
         return {
             "detecciones": dets,
             "confirmadas": len(confirmed),
@@ -1268,6 +1367,7 @@ class RiskEngine:
             "riesgo": level,
             "tracks": len(self.tracks),
             "ms": round(ms, 1),
+            "stages": stages,
             "sistema": self._estado_operativo(),
         }
 
