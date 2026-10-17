@@ -19,6 +19,13 @@ la rama `expo` el Modelo S7 v4 es definitivo: se conservan para trazabilidad
 Otros: `extract_frames.py` / `label_video_frames.py` (clips propios),
 `build_kaggle_variant.py` (variante descartada).
 
+Los pasos 1-4 necesitan el dataset de Hugging Face, que se clona como
+repositorio aparte (ver `data/README.md`):
+
+```bash
+scripts/get_dataset.sh          # -> ./stairs_fallhuman
+```
+
 Se ejecutan desde la raíz del repositorio, con el venv activo:
 
 ```bash

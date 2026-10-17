@@ -10,7 +10,7 @@ El modelo (Modelo S7 v4) **no se tocó**.
 | `app/server.py` (1 217 líneas: HTTP, hilos, dibujo, vídeo, auth) | `backend/api/*`, `backend/services/*`, `backend/rendering/draw.py` |
 | `app/risk_engine.py` (1 385 líneas) | `backend/perception/{engine,detectors,pose,tracking,alerts,catalog}.py` + `backend/privacy/anonymizer.py` |
 | `app/real_esrgan.py` + `build_esrgan.py` (ONNX) | `backend/enhancement/{archs,super_resolution}.py` (PyTorch puro) |
-| `app/templates/` | `frontend/templates/` (contenido idéntico) |
+| `app/templates/` | `frontend/templates/` (solo cambia el texto de la casilla de mejora de calidad) |
 | `scripts/`, `configs/train*.yaml` | `training/`, `training/configs/` |
 | Constantes en el código | `configs/app.yaml` |
 | `runs/yolov8s_zoom/weights/best.pt` (base v3) | `models/base/yolov8s_zoom_v3.pt` |

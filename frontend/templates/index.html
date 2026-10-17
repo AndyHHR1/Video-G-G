@@ -208,8 +208,8 @@
               <option value="33" selected>30 fps (recomendado)</option>
             </select>
           </label>
-          <label title="Con SR el live sube a ~0.8-1.2 s/frame (≈1 fps). Sin SR el live es fluido a 30 fps con cajas frescas; el SR 4× se aplica en uploads o con este toggle (lento, con retardo).">
-            <input type="checkbox" id="fast"> SR en vivo (≈4 fps)
+          <label title="Mejora de calidad Real-ESRGAN x4 (realesr-general-x4v3) en tiempo real: ~22 ms por cuadro en GPU, el video se mantiene fluido (~30 fps). La detección siempre usa el cuadro original.">
+            <input type="checkbox" id="fast"> Mejora de calidad (Real-ESRGAN x4)
           </label>
          </div>
         <div class="stage" id="scam">
@@ -640,7 +640,7 @@ $('#bcam').onclick = async () => {
       `${cam.ok ? 'conectada' : '<b style="color:#e03c3c">sin señal</b>'} · ` +
       `cámara ${v.videoWidth}×${v.videoHeight} → envío ${small.width}×${small.height} · ` +
       `${cam.sent} frames · ${cam.fps.toFixed(1)} fps · ` +
-      `${$('#fast').checked ? 'SR en vivo (≈4 fps)' : 'fluido 30 fps (sin SR)'}` +
+      `${$('#fast').checked ? 'mejora Real-ESRGAN x4 activa' : 'sin mejora de calidad'} · ` +
       `umbral ${$('#ccam').value}` +
       (cam.err ? ` · <b style="color:#e03c3c">${cam.err}</b>` : '');
   };
@@ -744,8 +744,8 @@ $('#bcam').onclick = async () => {
       // Cuerpo binario crudo: evita el parser multipart de Werkzeug, que
       // con un JPEG de ~50 KB costaba ~17 ms por fotograma. A 960 px el
       // blob pesa ~12 KB y el envío + decode quedan por debajo de 5 ms.
-      // #fast es SR en vivo: OFF (default) = live fluido 30 fps sin SR; ON =
-      // SR 4× (lento ~1 fps). El display es asíncrono: repinta el último
+      // #fast activa la mejora Real-ESRGAN x4 en vivo (~22 ms/cuadro en un hilo
+      // aparte del servidor); OFF = cuadro nativo. El display es asíncrono: repinta el último
       // SR+cajas a 30 fps (se permite retardo). Se purga el frame-by-frame.
       const sr = $('#fast').checked ? 1 : 0;
       const r = await fetch('/api/frame?conf=' + $('#ccam').value +

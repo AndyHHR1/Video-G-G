@@ -44,8 +44,8 @@ que funciona de forma fluida en tiempo real.
 | Detectar **persona distraída** | Señal `distraccion`: mano junto a la cara con cabeza inclinada, o un **celular** (COCO) a menos de 0.14 del rostro. Riesgo MEDIO. |
 | Detectar **no uso del pasamanos** | Señal `sin_pasamanos`: ninguna muñeca a la altura de la barandilla y brazo separado del tronco. Riesgo MEDIO. |
 | Detectar **anomalías en la escalera** (objetos, estorbos) | YOLOv8s COCO: mochila, bolso, maleta, botella, libro, paraguas → `obstaculo_escalon` (ALTO); mobiliario como contexto. |
-| Opción para ver la imagen en vivo **con mejora de calidad** | Casilla **«SR en vivo»**: Real-ESRGAN x4 (`realesr-general-x4v3`) en un hilo propio, ~22 ms por cuadro → el vídeo mejorado se ve fluido (~29 fps medidos). |
-| La interfaz debe ser la misma | El frontend (`frontend/templates/`) **no se modificó**: mismo plano, mismos botones; todo el trabajo fue en el backend. |
+| Opción para ver la imagen en vivo **con mejora de calidad** | Casilla **«Mejora de calidad (Real-ESRGAN x4)»**: Real-ESRGAN x4 (`realesr-general-x4v3`) en un hilo propio, ~22 ms por cuadro → el vídeo mejorado se ve fluido (~29 fps medidos). |
+| La interfaz debe ser la misma | Mismo plano y mismas pestañas. En el frontend solo se actualizó el texto de la casilla de mejora de calidad; todo lo demás se hizo en el backend. |
 
 Además: alertas con evidencia fotográfica **anonimizada**, registro auditable,
 autenticación del panel, estado operativo visible y procesamiento de imágenes y
@@ -173,7 +173,7 @@ PANEL_TOKEN="un-secreto-largo" scripts/run.sh --host 0.0.0.0
 
 - **Imagen:** analiza una foto (con mejora `RealESRGAN_x4plus` previa si hay GPU). No genera alertas: una foto no es un suceso en el tiempo.
 - **Vídeo:** procesa un vídeo completo y lo devuelve anotado en H.264 con su audio. Sí genera alertas (RQNF22).
-- **Cámara en vivo:** webcam del navegador. La casilla **«SR en vivo»** activa la mejora de calidad (el texto «≈4 fps» del botón es de la versión anterior; ahora va a ~29 fps).
+- **Cámara en vivo:** webcam del navegador. La casilla **«Mejora de calidad (Real-ESRGAN x4)»** activa la mejora en tiempo real (~29 fps).
 - **Clases:** leyenda de clases y su relación con los requisitos.
 
 > `getUserMedia` (webcam) solo funciona en un origen seguro: abrir en
@@ -191,7 +191,7 @@ El código está dividido en capas con dependencias en un solo sentido
 
 ```mermaid
 flowchart TB
-    subgraph FE["frontend/  (sin cambios)"]
+    subgraph FE["frontend/"]
         UI["index.html · login.html<br/>panel de supervisión"]
     end
     subgraph API["backend/api/  — HTTP (Flask)"]
@@ -437,7 +437,7 @@ resultado pareciera una foto real.
 | FP16 en YOLO | Medido peor en Turing (219 → 504 ms) y sin ganancia en otras GPUs. |
 | Mejorar la imagen **antes** de detectar en vivo | Cambia la distribución de entrada del detector en tiempo real y añade latencia; en vivo la SR es solo para visualizar. |
 | WebRTC / WebSockets | Más complejo; el JPEG crudo por HTTP ya da ~30 fps en red local. |
-| Modificar el frontend | Requisito: misma interfaz. |
+| Rediseñar el frontend | Requisito: misma interfaz (solo se actualizó un texto). |
 
 ---
 
@@ -532,15 +532,15 @@ Video-G-G/
 │   ├── enhancement/           Real-ESRGAN: archs + super_resolution
 │   ├── privacy/               anonimización de rostros
 │   └── rendering/             dibujo y codificación
-├── frontend/templates/        panel web (sin cambios)
+├── frontend/templates/        panel web
 ├── configs/app.yaml           configuración de ejecución
 ├── models/                    pesos (ver models/README.md)
 ├── requirements/              base · torch-cu128 · torch-cpu · dev
-├── scripts/                   setup.sh · run.sh
+├── scripts/                   setup.sh · run.sh · get_dataset.sh
 ├── tools/                     download_models · check_env · render_architecture
 ├── tests/                     unitarias + humo de la API
 ├── training/                  scripts y configs con los que se entrenó (histórico)
-├── data/                      vídeos de escaleras (no versionados, ver data/README.md)
+├── data/                      datos fuera del repo: dataset de Hugging Face y vídeos (ver data/README.md)
 └── docs/                      informe Word, requisitos, normativa, decisiones, diagramas
 ```
 
@@ -592,6 +592,7 @@ rama `semana-7` sobre la misma secuencia: salidas **idénticas** (ver
 | [Stairs](https://www.kaggle.com/datasets/samuelayman/stairs) | escalera | Kaggle |
 | [MOT15](https://www.kaggle.com/datasets/mdraselsarker/mot15-challenge-dataset) | persona | Kaggle |
 | [Le2i Fall Detection](https://github.com/YifeiYang210/Fall_Detection_dataset) | pérdida de equilibrio | uso académico |
+| [`andres31416/stairs_fallhuman`](https://huggingface.co/datasets/andres31416/stairs_fallhuman) | dataset unificado (fall, stairs, tracking), repositorio aparte | Hugging Face · `scripts/get_dataset.sh` |
 | Vídeos de escaleras UPAO | fine-tuning v4 | propios, no se distribuyen |
 
 Los datasets pertenecen a sus autores y se usan solo con fines académicos.
@@ -604,4 +605,3 @@ Los datasets pertenecen a sus autores y se usan solo con fines académicos.
 - MediaPipe Pose describe **una persona por fotograma**; con varias personas, las señales de pose se asignan a la que mejor encaja.
 - El test del Modelo S7 v4 no contiene caídas reales; la confirmación de caída se apoya en la geometría de pose.
 - El servidor de Flask es de un solo proceso (adecuado para una cámara). Sin HTTPS no hay cifrado.
-- El texto del botón «SR en vivo (≈4 fps)» corresponde a la versión anterior; se mantuvo por el requisito de no tocar el frontend.
