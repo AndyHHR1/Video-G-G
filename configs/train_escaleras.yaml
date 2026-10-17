@@ -25,13 +25,12 @@ batch: 8
 seed: 42
 device: 0
 workers: 2
-patience: 40           # early stopping mas generoso para dataset pequeno
+patience: 25            # early stopping estricto - el val/test gap indica sobreajuste
 project: runs
-name: yolov8s_escaleras_v2
+name: yolov8s_escaleras_v3
 resume:
 
 # --- Augmentaciones ---
-# RQNF12 pide resiliencia ante variaciones de iluminacion.
 hsv_h: 0.015
 hsv_s: 0.7
 hsv_v: 0.4
@@ -43,16 +42,24 @@ flipud: 0.0
 fliplr: 0.5
 mosaic: 1.0
 close_mosaic: 10
-mixup: 0.0
+mixup: 0.15          # aumentado para regularizacion
 
-# --- Optimizacion ---
-lr0: 0.0005             # menor LR para fine-tuning
+# --- Optimizacion / Regularizacion ---
+lr0: 0.0003           # LR mas bajo para evitar sobreajuste rapido
 lrf: 0.01
 momentum: 0.937
-weight_decay: 0.0005
-warmup_epochs: 3.0
+weight_decay: 0.001   # aumentado: regularizacion L2 mas fuerte
+warmup_epochs: 5.0   # mas epocas de warmup para estabilidad
 optimizer: auto
-cos_lr: false
+cos_lr: true          # schedule coseno para convergencia suave
+
+# --- Técnicas anti-sobreajuste (YOLOv8 8.4.170) ---
+dropout: 0.1          # dropout moderado: regulariza sin perder precision
+cls_pw: 0.25         # positive class weight: enfatiza deteccion de objetos
+cls: 0.3             # reducido cls loss weight vs box loss
+cutmix: 0.0          # desactivado - hurtio persona_erguida en v2
+auto_augment: randaugment  # augmentacion automatica de políticas
+
 val: true
 plots: true
 save_period: -1

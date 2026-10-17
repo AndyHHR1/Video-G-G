@@ -127,6 +127,11 @@ def main() -> None:
         lr0=cfg["lr0"], lrf=cfg["lrf"], momentum=cfg["momentum"],
         weight_decay=cfg["weight_decay"], warmup_epochs=cfg["warmup_epochs"],
         optimizer=cfg["optimizer"], cos_lr=cfg["cos_lr"],
+        dropout=cfg.get("dropout", 0.0),
+        cls_pw=cfg.get("cls_pw", 0.0),
+        cls=cfg.get("cls", 0.5),
+        cutmix=cfg.get("cutmix", 0.0),
+        auto_augment=cfg.get("auto_augment", None),
         val=cfg["val"], plots=cfg["plots"], save_period=cfg["save_period"],
         verbose=True,
     )
@@ -178,7 +183,16 @@ def main() -> None:
             print(f"    {name_p:20} mAP50={v['mAP50']:.4f}  mAP50-95={v['mAP50-95']:.4f}")
 
     # Guardar métricas
-    cfg_serializable = {k: str(v) if isinstance(v, Path) else v for k, v in cfg.items()}
+    cfg_serializable = {}
+    for k, v in cfg.items():
+        if isinstance(v, Path):
+            cfg_serializable[k] = str(v)
+        elif isinstance(v, list):
+            cfg_serializable[k] = list(v)
+        elif isinstance(v, dict):
+            cfg_serializable[k] = {kk: str(vv) if isinstance(vv, Path) else vv for kk, vv in v.items()}
+        else:
+            cfg_serializable[k] = v
     (run_dir / "metricas.json").write_text(
         json.dumps({"config": cfg_serializable, "metricas": metrics},
                     indent=2, ensure_ascii=False),

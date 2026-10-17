@@ -30,11 +30,12 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 
 # --- Configuración de partición por video -------------------------------------
-# Estándar: los videos 01, 04, 05, 06 → train; 02 → val; 03 → test.
-# Extra: todos → train (datos suplementarios).
+# v4: 01.mp4 → val (tiene todas las clases incl. persona_sentada/persona_erguida)
+#     02.mp4 → train (solo escalera/persona, pero más frames)
+# Estándar: 3 train, 1 val, 1 test. Extra: todos → train.
 VIDEO_SPLIT_ESTANDAR = {
-    "01.mp4": "train",
-    "02.mp4": "val",
+    "01.mp4": "val",
+    "02.mp4": "train",
     "03.mp4": "test",
     "04.mp4": "train",
     "05.mp4": "train",
