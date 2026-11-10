@@ -87,17 +87,45 @@ class CocoDetector:
 
 
 class PostureDetector:
-    """Modelo propio de 6 clases: postura de la persona y escalera."""
+    """Modelo propio v5: escalera (detector) + postura (clasificador).
 
-    CROP_CONF = 0.20     # confianza mínima dentro del recorte de una persona
-    STAIRS_CONF = 0.30
+    Son dos redes pequeñas en lugar de un detector de 6 clases:
 
-    def __init__(self, weights: str, device):
+    * `stairs()` usa un detector YOLO de 1 clase (`escalera`) sobre el
+      fotograma completo, a 512 px (las escaleras ocupan buena parte del
+      encuadre; más resolución no aporta y cuesta más).
+    * `classify()` usa un clasificador YOLO-cls sobre el recorte de cada
+      persona que ya localizó COCO: ~2 ms por persona, frente a pasar el
+      recorte por un detector completo a 640 px como en v4.
+
+    Los ids de clase se mantienen fijos (los usan el catálogo, el dibujo y
+    la API): 0 persona_caido · 1 persona_sentado · 2 persona_erguida ·
+    3 escalera · 4 persona (sin clasificar).
+    """
+
+    NAMES = {0: "persona_caido", 1: "persona_sentado", 2: "persona_erguida",
+             3: "escalera", 4: "persona"}
+    STAIRS_CONF = 0.35
+    STAIRS_IMGSZ = 512
+    POSTURE_IMGSZ = 224
+    MIN_POSTURE_CONF = 0.40   # por debajo, la postura se da como no decidida
+
+    def __init__(self, stairs_weights: str, posture_weights: str, device):
         from ultralytics import YOLO
         self.device = device
-        self.model = YOLO(weights)
+        self.model = YOLO(stairs_weights)          # detector de escalera
         self.model.to(device)
-        self.names = _names(self.model)
+        self.cls = YOLO(posture_weights)           # clasificador de postura
+        self.cls.to(device)
+        stairs_names = set(_names(self.model).values())
+        if "escalera" not in stairs_names:
+            raise ValueError(f"{stairs_weights}: no tiene la clase 'escalera' "
+                             f"({sorted(stairs_names)})")
+        self.cls_names = _names(self.cls)
+        unknown = set(self.cls_names.values()) - set(self.NAMES.values())
+        if unknown:
+            raise ValueError(f"{posture_weights}: clases desconocidas {unknown}")
+        self.names = dict(self.NAMES)
         self.id_of = {v: k for k, v in self.names.items()}
 
     def stairs(self, frame: np.ndarray, max_boxes: int = 2) -> list[tuple]:
@@ -107,43 +135,56 @@ class PostureDetector:
         cajas solapadas que cubrían todo el encuadre.
         """
         res = self.model.predict(frame, conf=self.STAIRS_CONF, iou=0.6,
+                                 imgsz=self.STAIRS_IMGSZ,
                                  device=self.device, verbose=False)[0]
         found = []
         if res.boxes is not None:
+            sn = _names(self.model)
             for b in res.boxes:
-                if self.names.get(int(b.cls[0])) == "escalera":
+                if sn.get(int(b.cls[0])) == "escalera":
                     found.append((float(b.conf[0]),
                                   [int(v) for v in b.xyxy[0].tolist()]))
         found.sort(reverse=True)
         return found[:max_boxes]
 
-    def classify(self, frame: np.ndarray, box: list[int]) -> tuple[str, float]:
-        """Postura de una persona recortándola y pasando el recorte al modelo.
-
-        El recorte se ajusta a la caja con un margen del 8 % por lado y se
-        reescala a 640x640. No se usa un cuadrado de lado max(ancho, alto):
-        con una persona alta el recorte salía más ancho que la imagen y la
-        escalera dominaba.
-        """
+    @staticmethod
+    def _crop(frame: np.ndarray, box: list[int], pad: float = 0.08):
+        """Recorte con un 8 % de margen por lado: el MISMO que se usó para
+        generar los recortes de entrenamiento (training/prepare_v5.py)."""
         H, W = frame.shape[:2]
         x1, y1, x2, y2 = box
-        pad = 0.08
         bw, bh = x2 - x1, y2 - y1
         ax1 = int(max(0, x1 - bw * pad)); ax2 = int(min(W, x2 + bw * pad))
         ay1 = int(max(0, y1 - bh * pad)); ay2 = int(min(H, y2 + bh * pad))
         if ax2 - ax1 < 16 or ay2 - ay1 < 16:
-            return "", 0.0
-        crop = cv2.resize(frame[ay1:ay2, ax1:ax2], (640, 640),
-                          interpolation=cv2.INTER_LINEAR)
-        res = self.model.predict(crop, conf=self.CROP_CONF, device=self.device,
-                                 verbose=False)[0]
-        best, bestc = "", 0.0
-        if res.boxes is not None:
-            for b in res.boxes:
-                name = self.names.get(int(b.cls[0]), "")
-                if name == "escalera":
-                    continue
-                c = float(b.conf[0])
-                if c > bestc:
-                    best, bestc = name, c
-        return best, bestc
+            return None
+        return frame[ay1:ay2, ax1:ax2]
+
+    def classify(self, frame: np.ndarray, box: list[int]) -> tuple[str, float]:
+        """Postura de una persona: clase y probabilidad del clasificador."""
+        return self.classify_many(frame, [box])[0]
+
+    def classify_many(self, frame: np.ndarray,
+                      boxes: list[list[int]]) -> list[tuple[str, float]]:
+        """Postura de varias personas en UNA sola pasada (lote) del clasificador.
+
+        Devuelve `("", prob)` cuando la clase ganadora no llega a
+        `MIN_POSTURE_CONF`: mejor «sin clasificar» que una postura dudosa.
+        """
+        out: list[tuple[str, float]] = [("", 0.0)] * len(boxes)
+        crops, idx = [], []
+        for i, box in enumerate(boxes):
+            c = self._crop(frame, box)
+            if c is not None:
+                crops.append(c); idx.append(i)
+        if not crops:
+            return out
+        res = self.cls.predict(crops, imgsz=self.POSTURE_IMGSZ,
+                               device=self.device, verbose=False)
+        for i, r in zip(idx, res):
+            p = r.probs
+            if p is None:
+                continue
+            name, conf = self.cls_names.get(int(p.top1), ""), float(p.top1conf)
+            out[i] = (name, conf) if conf >= self.MIN_POSTURE_CONF else ("", conf)
+        return out

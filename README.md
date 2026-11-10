@@ -20,7 +20,7 @@ Funciona en una **GTX 1650 (4 GB)**: el perfil `baja_vram` se activa solo (§4.5
 y el panel tiene un botón **«Detener sistema»** que apaga todo de forma ordenada.
 
 > Universidad Privada Antenor Orrego · Curso de Percepción Computacional · 2026
-> Rama `expo` · Modelo **S7 v4** (release `v1.2.0-escaleras-v4`, definitivo, no se reentrena)
+> Rama `modelo-v5` · **Modelo v5** (escalera YOLO11n + postura YOLO11n-cls, entrenado con `stairs_fallhuman`). El Modelo S7 v4 sigue en la rama `expo`.
 
 ![Arquitectura](docs/img/arquitectura.png)
 
@@ -250,7 +250,7 @@ flowchart TB
     end
     subgraph CORE["núcleo"]
         ENG["perception/engine.py<br/>RiskEngine.step()"]
-        DET["perception/detectors.py<br/>COCO + Modelo S7 v4"]
+        DET["perception/detectors.py<br/>COCO + Modelo v5"]
         POSE["perception/pose.py<br/>MediaPipe Pose"]
         TRK["perception/tracking.py<br/>IoU tracker"]
         ALM["perception/alerts.py<br/>persistencia + evidencia"]
@@ -317,12 +317,12 @@ Claves del diseño:
 
 ```
 fotograma ─► 1 personas (YOLOv8s COCO) ──────────────┐
-          ─► 2 escalera (Modelo S7 v4) ──────────────┤
+          ─► 2 escalera (Modelo v5, detector) ───────┤
           ─► 3 pose (MediaPipe) → señales ───────────┤
           ─► 4 objetos (YOLOv8s COCO) ───────────────┤
                                                      ▼
           5 postura por persona: geometría de pose (si es la persona emparejada)
-                                 o recorte → Modelo S7 v4
+                                 o recortes (en lote) → Modelo v5, clasificador
           6 seguimiento IoU → identidad estable (RQF05)
             caída por recorte: MEDIO «REVISAR» hasta 3 fotogramas seguidos → ALTO
           7 celular junto a la cara → distracción (RQF02-3)
@@ -355,7 +355,7 @@ tiene ≤ 4.5 GB o es una GTX 16xx, aplica el perfil `baja_vram`
 |---|---|---|---|
 | `enhancement.half` (FP16 en Real-ESRGAN) | sí | **no** | Las GTX 16xx tienen fallos conocidos con media precisión (NaN / imagen negra) |
 | `enhancement.live.input_max` | 480 px | **320 px** | ~2.2× menos trabajo de SR: deja GPU libre para la detección |
-| Detección (S7 v4, 640 px) | igual | igual | El modelo se entrenó a 640 px y **no se reentrena** |
+| Modelo v5 (escalera 512 px, postura 224 px) | igual | igual | Ya es ligero (YOLO11n / YOLO11n-cls) y se entrenó a esas resoluciones |
 | Modelos de imagen (YOLO11) | carga en el primer uso | igual | No ocupan VRAM hasta que se usa la pestaña Imagen |
 
 Además se quitó el modelo grande `RealESRGAN_x4plus` (16.7 M parámetros), que
@@ -458,53 +458,42 @@ masa).
 
 ## 5. Arquitectura de los modelos
 
-El sistema combina **cuatro redes**. Solo la primera es propia del proyecto.
+El sistema combina varias redes. Solo las dos del Modelo v5 son propias del
+proyecto.
 
-### 5.1 Modelo S7 v4 — detector propio (YOLOv8s, 6 clases)
+### 5.1 Modelo v5 — escalera + postura (rama `modelo-v5`)
 
-`models/detector/escaleras_s7_v4.pt` · SHA-256 `b6a04f2f…d7ed` · release
-[`v1.2.0-escaleras-v4`](https://github.com/AndyHHR1/Video-G-G/releases/tag/v1.2.0-escaleras-v4).
-**Es el modelo definitivo: en esta rama no se reentrena ni se modifica.**
+Entrenado solo con [`stairs_fallhuman`](https://huggingface.co/datasets/andres31416/stairs_fallhuman)
+(`training/prepare_v5.py`, `training/train_v5.py`). Sustituye al Modelo S7 v4
+(YOLOv8s de 6 clases, que se conserva en la rama `expo`). El motor usaba el
+modelo propio para dos tareas distintas, así que v5 son **dos redes pequeñas**:
 
-| Bloque | Detalle |
-|---|---|
-| Backbone | CSPDarknet con bloques **C2f** (convoluciones 3×3 + concatenación de gradientes parciales) y **SPPF** al final para campo receptivo amplio. |
-| Neck | **PAN-FPN**: fusiona mapas a 3 escalas (strides 8, 16, 32) arriba-abajo y abajo-arriba, para personas cercanas y lejanas. |
-| Head | **Anchor-free y desacoplado**: ramas separadas para caja (DFL, *Distribution Focal Loss*) y clase (BCE). |
-| Tamaño | 11.1 M parámetros · ~28.6 GFLOPs a 640 px · 22 MB |
-| Entrada | 640×640 (letterbox) |
-| Clases | `0 persona_caido` · `1 persona_sentado` · `2 persona_erguida` · `3 escalera` · `4 persona` · `5 persona_desequilibrio` |
+| Modelo | Tarea | Base · entrada | Test (nunca visto) | GPU / CPU | Tamaño |
+|---|---|---|---|---|---|
+| `models/detector/escalera_v5.pt` | detectar `escalera` en el fotograma | YOLO11n · 512 px | mAP@0.5 **0.802** · P 0.79 · R 0.77 | 11 / 26 ms | 5.5 MB |
+| `models/detector/postura_v5.pt` | postura del recorte de cada persona | YOLO11n-cls · 224 px | recall caído **95 %** · sentado **89 %** · erguido **99 %** (media 94.3 %) | 7 / 10 ms | 3.2 MB |
 
-**Cómo se obtuvo (historia, no se repite aquí):**
+* **Postura por clasificador de recortes**: COCO ya encuentra a la persona; v4
+  pasaba cada recorte por un detector completo a 640 px. Ahora todas las
+  personas se clasifican en un solo lote.
+* **Peatones de MOT15 como `persona_erguida`**: en v4 eran una clase `persona`
+  aparte que competía con `persona_erguida`.
+* Variantes `s` probadas y descartadas (postura-s: media 89.4 %, sobreajusta;
+  escalera-s: +2.5 puntos de mAP al doble de coste en CPU).
+* `persona_desequilibrio` (pre-caída) no tiene datos en el dataset: la detecta
+  el esqueleto (§4.7).
 
-1. **Base v3 (`models/base/yolov8s_zoom_v3.pt`)**: YOLOv8s COCO afinado con Fall Detection Dataset, Stairs, MOT15 y Le2i (clase pre-caída), más variantes de primer plano por recorte. Scripts en `training/`.
-2. **Fine-tuning v4**: a partir de la base v3, con fotogramas de los vídeos de escaleras UPAO (`data/Escaleras/Estándar` → train/val/test **por vídeo**, sin fuga; `data/Escaleras/Extra` → solo train), pseudo-etiquetados con el modelo base. Configuración en `training/configs/train_escaleras_v4.yaml`: 100 épocas, 640 px, batch 8, `lr0=3e-4` con coseno, `dropout=0.2`, `mixup=0.15`, `cutmix=0.1`, sin `auto_augment`, *early stopping* de 25 épocas.
-
-**Métricas (de `models/detector/escaleras_s7_v4.metrics.json`):**
-
-| Partición | Precision | Recall | **mAP@0.5** | mAP@0.5:0.95 |
-|---|---|---|---|---|
-| val | 0.665 | 0.786 | **0.776** | 0.635 |
-| test | 0.645 | 0.650 | **0.768** | 0.662 |
-
-| Clase | mAP@0.5 val | mAP@0.5 test |
-|---|---|---|
-| persona_caido | 0.737 | — (no hay ejemplos en test) |
-| persona_sentado | 0.551 | 0.995 |
-| persona_erguida | 0.728 | 0.698 |
-| escalera | 0.989 | 0.995 |
-| persona | 0.873 | 0.383 |
-
-RQNF10 (mAP@0.5 > 75 %) **se cumple** en val y en test. Advertencia honesta:
-el test de los vídeos UPAO es pequeño y no contiene caídas reales, por eso la
-caída se confirma también por **geometría de pose** y nunca solo por el modelo.
+Advertencia honesta: el test de postura es pequeño (41 caído, 18 sentado, 15
+de pie de fotos de stock + 150 peatones) y no incluye la vista en diagonal de
+la escalera real; la caída se sigue confirmando por **geometría de pose** y
+por persistencia temporal, nunca solo por el modelo.
 
 ### 5.2 YOLOv8s COCO — personas y objetos
 
 `models/coco/yolov8s.pt` (Ultralytics, 80 clases COCO). Misma arquitectura que
 5.1. Se usa para **localizar personas** (en escenas reales de escalera el modelo
 propio daba 0.08 de confianza donde COCO daba 0.92) y para detectar **objetos
-sobre los escalones**. Reparto: *COCO decide dónde hay gente; el Modelo S7 v4
+sobre los escalones**. Reparto: *COCO decide dónde hay gente; el Modelo v5
 decide qué postura tiene*.
 
 ### 5.3 MediaPipe Pose (BlazePose, variante *lite*)
@@ -574,7 +563,7 @@ resultado pareciera una foto real.
 
 | Decisión | Por qué |
 |---|---|
-| **No reentrenar el modelo** | El Modelo S7 v4 ya supera RQNF10 (0.776/0.768) y es el entregable estable. Las mejoras de esta rama son de sistema, no de pesos. |
+| **Modelo v5: detector de escalera + clasificador de postura** | El motor solo usaba el modelo propio para la escalera y para la postura del recorte de cada persona; un clasificador es la herramienta correcta para lo segundo y cuesta una fracción (§5.1). |
 | **Real-ESRGAN `general-x4v3` para el vivo** | Es de la misma familia Real-ESRGAN pero compacto: 22 ms/cuadro frente a ~460 ms de la versión anterior. Permite ver el vídeo mejorado fluido. |
 | **Solo vídeo en vivo** | Pedido del cliente: se quitaron imagen y vídeo subidos y el modelo de SR que solo ellos usaban. |
 | **Audio e imagen como módulos aparte** (`modulos/`) | Pedido: integrar el trabajo de los otros grupos sin interferir en el vídeo. Se cargan aislados y el vídeo no los importa. |
@@ -674,7 +663,7 @@ Resumen. El estado detallado de los 39 requisitos (incluidos RQF09–RQF11 y RQN
 | RQNF02 | Latencia < 500 ms | **Cumple** — respuesta 4–5 ms, motor 27 ms |
 | RQNF03 | GPU ≥ 6 GB | **Supera** — funciona en 4 GB (GTX 1650) con el perfil `baja_vram`; pico medido 0.32 GB |
 | RQNF09 / RQNF26 | Estado operativo real | **Cumple** — `/api/health` |
-| RQNF10 | mAP@0.5 > 75 % | **Cumple** — val 0.776, test 0.768 |
+| RQNF10 | mAP@0.5 > 75 % | **Cumple** — Modelo v5: escalera mAP@0.5 0.802 en test; postura 94.3 % de acierto medio por clase |
 | RQNF12 | Resiliencia a iluminación | **Cumple** — augmentations HSV; SR limpia ruido |
 | RQNF13 | Reconexión automática | **Cumple** — navegador (5 reintentos) y RTSP |
 | RQNF14 | Protección de datos | **Cumple** — §8 |
@@ -796,7 +785,7 @@ Los datasets pertenecen a sus autores y se usan solo con fines académicos.
 
 - Las señales de pasamanos y distracción son **reglas sobre keypoints** calibradas con pocas escenas; no hay ground truth público para medirlas.
 - MediaPipe Pose describe **una persona por fotograma**; con varias personas, las señales de pose se asignan a la que mejor encaja.
-- El test del Modelo S7 v4 no contiene caídas reales; la confirmación de caída se apoya en la geometría de pose.
+- El Modelo v5 se evaluó con fotos de stock y peatones de MOT15, no con la escalera real en vista diagonal; la confirmación de caída se apoya en la geometría de pose y en la persistencia temporal.
 - El servidor de Flask es de un solo proceso (adecuado para una cámara). Sin HTTPS no hay cifrado.
 - El perfil de GTX 1650 se validó en una RTX 5070 limitando la memoria a 3.6 GB y forzando FP32; los tiempos reales en una 1650 serán mayores (la vista en vivo sigue a 30 fps porque la detección es asíncrona).
 - El audio se probó con señales sintéticas y el micrófono simulado del navegador; sus umbrales (de `final.py`) no están calibrados en una escalera real y sus índices no son probabilidades clínicas.

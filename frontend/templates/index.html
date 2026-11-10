@@ -507,11 +507,23 @@ let cam = { on:false, stream:null, busy:false, last:0, sent:0, err:null, ok:fals
 // y, si la persona se movía, "caían en sitios que no pertenecen").
 let frameSeq = 0;
 const frameBuffer = new Map();
-const FRAME_BUFFER_MAX = 10;
+// 30 fps × ~0.5 s: margen para que el fotograma analizado siga en el buffer
+// aunque el motor vaya lento (con 10 se perdía en equipos modestos).
+const FRAME_BUFFER_MAX = 16;
+// Último fotograma pintado (ver "pintado monótono" en sendFrame).
+let shown = { fid: 0, img: null, sr: false };
+async function b64ToBitmap(s) {
+  const b64 = /^[0-9a-f]+$/i.test(s) ? hexToB64(s) : s;
+  const r = await fetch('data:image/jpeg;base64,' + b64);
+  return createImageBitmap(await r.blob());
+}
 let audioEl = null;  // <audio> para playback local del micrófono
 
 function stopCam() {
   cam.on = false;
+  if (shown.img && shown.img.close) shown.img.close();
+  shown = { fid: 0, img: null, sr: false };
+  frameBuffer.clear();
   if (cam.stream) { cam.stream.getTracks().forEach(t => t.stop()); cam.stream = null; }
   if (cam.video) { cam.video.remove(); cam.video = null; }
   if (audioEl) { audioEl.remove(); audioEl = null; }
@@ -757,24 +769,41 @@ $('#bcam').onclick = async () => {
       // lienzo para mostrar la SR. En modo normal (sin SR) el servidor
       // NO envía la imagen (el live a 30 fps sin ella), así que se usa el
       // frame nativo capturado aqui en el canvas `small`.
-      if (d.image) {
-        const img = new Image();
-        img.onload = () => drawBoxes(img, disp, d);
-        const b64 = /^[0-9a-f]+$/i.test(d.image) ? hexToB64(d.image) : d.image;
-        img.src = 'data:image/jpeg;base64,' + b64;
-      } else {
-        // Sin SR: dibujar sobre el frame que el motor ANALIZÓ (d.frame_id), no
-        // sobre el vivo, para que las cajas cuadren aun con el retardo async.
-        const fid = d.frame_id != null ? String(d.frame_id) : null;
-        if (fid != null && frameBuffer.has(fid)) {
-          const b = frameBuffer.get(fid);
-          frameBuffer.delete(fid);
-          const img = new Image();
-          img.onload = () => { drawBoxes(img, disp, d); URL.revokeObjectURL(img.src); };
-          img.src = URL.createObjectURL(b);
-        } else {
+      // Pintado MONÓTONO: nunca se muestra un fotograma más viejo que el último
+      // pintado. Causa de los "tirones" (el vídeo retrocedía y luego avanzaba):
+      // en modo asíncrono el servidor repite el mismo `frame_id` mientras el
+      // motor no termina el siguiente; la 1.ª respuesta pintaba ese fotograma
+      // (viejo, ~100-200 ms) y lo borraba del buffer, y las repetidas, al no
+      // encontrarlo, pintaban el fotograma VIVO (nuevo) -> viejo/nuevo/viejo.
+      // Además las respuestas "pendiente" y los onload de <img> asíncronos
+      // podían llegar desordenados. Ahora:
+      //   * frame_id < último pintado  -> se descarta (respuesta atrasada)
+      //   * frame_id == último pintado -> no se repinta (mismo fotograma), salvo
+      //     que llegue su versión mejorada (SR) y antes se pintó la nativa
+      //   * frame_id >  último pintado -> se decodifica y se pinta
+      //   * sin frame_id (motor arrancando) -> solo se pinta el vivo si aún no
+      //     hay nada en pantalla
+      const rfid = d.frame_id != null ? Number(d.frame_id) : null;
+      if (rfid == null || !Number.isFinite(rfid)) {
+        if (!shown.img) drawBoxes(small, disp, d);
+      } else if (rfid > shown.fid || (rfid === shown.fid && d.image && !shown.sr)) {
+        let src = null, isSr = false;
+        try {
+          if (d.image) { src = await b64ToBitmap(d.image); isSr = true; }
+          else if (frameBuffer.has(String(rfid))) src = await createImageBitmap(frameBuffer.get(String(rfid)));
+        } catch (_) { src = null; }
+        // se vuelve a comprobar tras el await: otra respuesta pudo adelantarse
+        if (src && (rfid > shown.fid || (rfid === shown.fid && isSr && !shown.sr))) {
+          if (shown.img && shown.img.close) shown.img.close();
+          shown = { fid: rfid, img: src, sr: isSr };
+          drawBoxes(src, disp, d);
+        } else if (src && src.close) {
+          src.close();
+        } else if (!src && !shown.img) {
           drawBoxes(small, disp, d);
         }
+        // los fotogramas anteriores al pintado ya no se mostrarán nunca
+        for (const k of [...frameBuffer.keys()]) if (Number(k) < rfid) frameBuffer.delete(k);
       }
       $('#camrisk').innerHTML = riskBox(d.summary) + `
           <div class="stat"><span>Inferencia</span><b>${d.timing.predict} ms</b></div>

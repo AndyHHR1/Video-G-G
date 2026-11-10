@@ -13,8 +13,8 @@ Qué cambia el perfil `baja_vram` (todo editable en `configs/app.yaml`):
 * **Entrada más pequeña a la mejora en vivo** (`enhancement.live.input_max`):
   el coste de SRVGGNetCompact crece con los píxeles de entrada; 320 px en
   lugar de 480 px es ~2,2× menos trabajo y deja GPU libre para la detección.
-* La detección NO se toca: el detector S7 v4 se entrenó a 640 px y bajar la
-  resolución cambiaría su precisión (el modelo no se reentrena).
+* La detección NO se toca: el Modelo v5 ya es ligero (escalera YOLO11n a
+  512 px, postura YOLO11n-cls a 224 px) y se entrenó a esas resoluciones.
 
 El perfil se elige con `hardware.profile`: `auto` (por defecto) lo activa si
 la GPU tiene poca VRAM o es una GTX 16xx; `normal` y `baja_vram` lo fuerzan.
@@ -44,10 +44,10 @@ def gpu_info() -> dict:
 
 def choose_profile(profile: str, info: dict, low_vram_gb: float) -> str:
     profile = str(profile or "auto").lower()
-    if profile in ("normal", "baja_vram"):
+    if profile in ("normal", "baja_vram", "cpu"):
         return profile
     if not info:
-        return "normal"                 # CPU: el perfil de GPU no aplica
+        return "cpu"                    # sin GPU: perfil ligero de procesador
     if info["vram_gb"] <= low_vram_gb:
         return "baja_vram"
     if any(tag in info["name"].upper() for tag in LOW_TIER_NAMES):
@@ -77,18 +77,28 @@ def apply_profile(settings, info: dict | None = None) -> tuple[str, dict]:
     """
     hw = settings.hardware
     info = gpu_info() if info is None else info
-    name = choose_profile(hw.profile, info, hw.low_vram_gb)
+    if str(settings.device).lower() == "cpu" and \
+            str(hw.profile or "auto").lower() == "auto":
+        name = "cpu"                    # GPU presente pero forzado a CPU
+    else:
+        name = choose_profile(hw.profile, info, hw.low_vram_gb)
     changes: dict = {}
-    if name == "baja_vram" and settings.device != "cpu":
-        for key, value in (hw.baja_vram or {}).items():
-            try:
-                before = _get_dotted(settings, key)
-                _set_dotted(settings, key, value)
-            except (AttributeError, KeyError):
-                print(f"  [aviso] hardware.baja_vram: clave desconocida {key!r}")
-                continue
-            if before != value:
-                changes[key] = (before, value)
+    overrides = {}
+    if name == "baja_vram" and str(settings.device).lower() != "cpu":
+        overrides = hw.baja_vram or {}
+    elif name == "cpu":
+        overrides = hw.cpu or {}
+    for key, value in overrides.items():
+        try:
+            before = _get_dotted(settings, key)
+            _set_dotted(settings, key, value)
+        except (AttributeError, KeyError):
+            print(f"  [aviso] hardware.{name}: clave desconocida {key!r}")
+            continue
+        if before != value:
+            changes[key] = (before, value)
+    if changes and hasattr(settings, "resolve_paths"):
+        settings.resolve_paths()        # p. ej. skeleton.model -> model_path
     hw.active = name
     hw.gpu = info
     return name, changes

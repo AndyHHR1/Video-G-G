@@ -14,7 +14,8 @@ import cv2
 from backend.config import load_settings
 
 SETTINGS = load_settings()
-HAVE_MODELS = SETTINGS.detector_path.is_file() and SETTINGS.coco_path.is_file()
+HAVE_MODELS = (SETTINGS.detector_path.is_file() and SETTINGS.posture_path.is_file()
+               and SETTINGS.coco_path.is_file())
 
 
 @unittest.skipUnless(HAVE_MODELS, "faltan pesos: python tools/download_models.py")

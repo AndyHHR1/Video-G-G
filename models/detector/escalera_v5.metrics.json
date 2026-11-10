@@ -1,0 +1,39 @@
+{
+  "task": "escalera",
+  "base": "yolo11n.pt",
+  "weights": "runs/v5/escalera_n/weights/best.pt",
+  "hp": {
+    "seed": 42,
+    "deterministic": false,
+    "plots": true,
+    "exist_ok": true,
+    "hsv_h": 0.015,
+    "hsv_s": 0.6,
+    "hsv_v": 0.45,
+    "fliplr": 0.5,
+    "flipud": 0.0,
+    "imgsz": 512,
+    "epochs": 100,
+    "batch": 16,
+    "patience": 25,
+    "degrees": 5.0,
+    "translate": 0.1,
+    "scale": 0.5,
+    "shear": 2.0,
+    "mosaic": 1.0,
+    "close_mosaic": 10,
+    "mixup": 0.05,
+    "cos_lr": true
+  },
+  "test": {
+    "mAP50": 0.8024,
+    "mAP50_95": 0.4196,
+    "precision": 0.7908,
+    "recall": 0.771
+  },
+  "latency_ms": {
+    "gpu": 11.16,
+    "cpu": 26.14
+  },
+  "size_mb": 5.46
+}

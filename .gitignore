@@ -99,8 +99,8 @@ img_prueba*
 test_img*
 
 # --- Pesos de modelos ---------------------------------------------------------
-# Solo se versionan el Modelo S7 v4, el COCO que usa el motor y la base de su
-# entrenamiento. El resto (Real-ESRGAN, descargas automáticas de Ultralytics
+# Solo se versionan el Modelo v5 (escalera + postura) y el COCO que usa el
+# motor. El resto (Real-ESRGAN, descargas automáticas de Ultralytics
 # como yolov8n.pt / yolo11n.pt) se obtiene con tools/download_models.py.
 *.pt
 *.pth
@@ -109,9 +109,9 @@ test_img*
 *.torchscript
 *.tflite
 *.safetensors
-!models/detector/escaleras_s7_v4.pt
+!models/detector/escalera_v5.pt
+!models/detector/postura_v5.pt
 !models/coco/yolov8s.pt
-!models/base/yolov8s_zoom_v3.pt
 
 # --- Secretos y credenciales -------------------------------------------------
 # PANEL_TOKEN (RQNF19) se lee de una variable de entorno, nunca del repo.

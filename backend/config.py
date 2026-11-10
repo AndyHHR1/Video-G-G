@@ -28,7 +28,10 @@ class ServerCfg:
 
 @dataclass
 class ModelsCfg:
-    detector: str = "models/detector/escaleras_s7_v4.pt"
+    # Modelo v5: detector de escalera (1 clase) + clasificador de postura
+    # sobre el recorte de cada persona (3 clases). Ver training/prepare_v5.py.
+    detector: str = "models/detector/escalera_v5.pt"
+    posture: str = "models/detector/postura_v5.pt"
     coco: str = "models/coco/yolov8s.pt"
     sr_dir: str = "models/sr"
 
@@ -170,11 +173,21 @@ def _baja_vram_default() -> dict:
             "skeleton.every": 3}
 
 
+def _cpu_default() -> dict:
+    # Sin GPU, el esqueleto YOLOv8s-Pose era el 50 % del coste del motor
+    # (61.6 ms/frame medidos con tools/bench_engine.py --set device=cpu).
+    return {"skeleton.model": "models/pose/yolov8n-pose.pt",
+            "skeleton.imgsz": 480,
+            "skeleton.every": 4,
+            "engine.obstacle_every": 17}
+
+
 @dataclass
 class HardwareCfg:
-    profile: str = "auto"          # auto | normal | baja_vram
+    profile: str = "auto"          # auto | normal | baja_vram | cpu
     low_vram_gb: float = 4.5       # auto: <= esta VRAM -> baja_vram
     baja_vram: dict = field(default_factory=_baja_vram_default)
+    cpu: dict = field(default_factory=_cpu_default)   # auto: sin GPU -> cpu
     # Rellenados en el arranque por backend.hardware.apply_profile
     active: str = "normal"
     gpu: dict = field(default_factory=dict)
@@ -219,6 +232,10 @@ class Settings:
     @property
     def detector_path(self) -> Path:
         return self.path(self.models.detector)
+
+    @property
+    def posture_path(self) -> Path:
+        return self.path(self.models.posture)
 
     @property
     def coco_path(self) -> Path:

@@ -18,9 +18,13 @@ server:
 device: auto
 
 models:
-  # Modelo definitivo "Modelo S7 v4" (release v1.2.0-escaleras-v4).
-  # No se reentrena: es el entregable final.
-  detector: models/detector/escaleras_s7_v4.pt
+  # Modelo v5 (rama modelo-v5), entrenado con stairs_fallhuman:
+  #   detector -> escalera (YOLO11, 1 clase) sobre el fotograma completo
+  #   posture  -> postura (YOLO11-cls: caído / sentado / erguido) sobre el
+  #               recorte de cada persona que localiza COCO
+  # Ver training/prepare_v5.py y training/train_v5.py.
+  detector: models/detector/escalera_v5.pt
+  posture: models/detector/postura_v5.pt
   # YOLOv8s COCO: localiza personas y objetos sobre la escalera.
   coco: models/coco/yolov8s.pt
   # Pesos de superresolución (Real-ESRGAN), descargados por tools/download_models.py
@@ -38,6 +42,9 @@ engine:
   people_every: 6
   stairs_every: 13
   obstacle_every: 11
+  # Igual que people_every A PROPÓSITO: la postura se calcula cuando se
+  # refrescan las cajas de personas y entre medias la caché (por solape) acierta
+  # siempre. Medido con 7 (desalineado): 12.6 ms/frame frente a 7.6 ms.
   classify_every: 6
   person_conf: 0.20
   person_imgsz: 512

@@ -64,7 +64,8 @@ class RiskEngine:
         self.th = th
 
         # --- componentes -------------------------------------------------
-        self.posture = PostureDetector(str(s.detector_path), self.device)
+        self.posture = PostureDetector(str(s.detector_path),
+                                       str(s.posture_path), self.device)
         self.coco = CocoDetector(str(s.coco_path), self.device,
                                  obstacle_conf=th.obstacle,
                                  person_conf=e.person_conf,
@@ -96,13 +97,15 @@ class RiskEngine:
 
         # --- caches entre fotogramas --------------------------------------
         self._frame_no = 0
-        self._last_people: list = []
-        self._last_stairs: list = []
+        # None = la etapa aún no se ha ejecutado (ver step(): cadencias)
+        self._last_people: list | None = None
+        self._last_stairs: list | None = None
         self._last_obstacles: list = []
         self._last_geom: str | None = None
         self._last_landmarks: list | None = None
-        self._last_class: tuple | None = None
-        self._last_skeletons: list = []
+        # [(caja, postura, prob), ...] de la última pasada del clasificador
+        self._last_class: list | None = None
+        self._last_skeletons: list | None = None
         # fotogramas seguidos en que un track mantiene "caída" por recorte
         self._fall_held: dict = {}
 
@@ -118,13 +121,13 @@ class RiskEngine:
 
     def reset(self) -> None:
         """Limpia las caches de fotograma (cada imagen subida es otra escena)."""
-        self._last_people = []
-        self._last_stairs = []
+        self._last_people = None
+        self._last_stairs = None
         self._last_obstacles = []
         self._last_geom = None
         self._last_landmarks = None
         self._last_class = None
-        self._last_skeletons = []
+        self._last_skeletons = None
         self._fall_held.clear()
         if self.skeleton is not None:
             self.skeleton.reset()
@@ -134,7 +137,7 @@ class RiskEngine:
         return self.alerts.has_pending
 
     def flush_evidence(self, annotated: np.ndarray) -> None:
-        self.alerts.flush_evidence(annotated, people=self._last_people)
+        self.alerts.flush_evidence(annotated, people=self._last_people or [])
 
     # ------------------------------------------------------------------ #
     # Estado del sistema
@@ -251,15 +254,18 @@ class RiskEngine:
             return force or n % max(1, every) == 0
 
         # --- 1. personas (COCO) ------------------------------------------
-        people = self.coco.people(frame) \
-            if (due(self.people_every) or not self._last_people) \
-            else self._last_people
-        self._last_people = people
+        # `None` = aún no se ha ejecutado; una lista vacía = se ejecutó y no
+        # había nadie. Antes se usaba `not lista`, y con la escena vacía (o sin
+        # escalera, abajo) la etapa corría en TODOS los fotogramas en lugar de
+        # a su cadencia: medido, la escalera costaba ~14 ms/frame en vez de ~1.
+        if due(self.people_every) or self._last_people is None:
+            self._last_people = self.coco.people(frame)
+        people = self._last_people
         stages["people"] = round((time.perf_counter() - t0) * 1000, 2)
 
         # --- 2. escalera (contexto, cadencia lenta) -----------------------
         t = time.perf_counter()
-        if due(self.stairs_every) or not self._last_stairs:
+        if due(self.stairs_every) or self._last_stairs is None:
             self._last_stairs = self.posture.stairs(frame, self.max_stairs_boxes)
         stairs = self._last_stairs
         stages["stairs"] = round((time.perf_counter() - t) * 1000, 2)
@@ -279,12 +285,12 @@ class RiskEngine:
         # --- 3b. esqueletos YOLOv8-Pose (varias personas, con ID) ---------
         t = time.perf_counter()
         if self.skeleton is not None and (due(self.skeleton_every)
-                                          or not self._last_skeletons):
+                                          or self._last_skeletons is None):
             try:
                 self._last_skeletons = self.skeleton.step(frame)
             except Exception as exc:                        # noqa: BLE001
                 self._fail("pose", exc)
-        skeletons = self._last_skeletons
+        skeletons = self._last_skeletons or []
         stages["skeleton"] = round((time.perf_counter() - t) * 1000, 2)
 
         pose_signals = []
@@ -317,21 +323,42 @@ class RiskEngine:
             pose_idx = 0          # una sola persona: la pose es suya
 
         run_class = (n % max(1, self.classify_every) == 0
-                     or self._last_class is None)
+                     or not self._last_class)
         t = time.perf_counter()
+        # Postura por clasificador, en UN lote para todas las personas que no
+        # tiene la pose. Entre medias se reutiliza la postura de la caja
+        # anterior que más solapa (por persona; antes la caché guardaba una
+        # sola caja y, con varias personas, se cruzaban las posturas).
+        need = [i for i in range(len(people))
+                if not (geom is not None and i == pose_idx)]
+        by_idx: dict[int, tuple] = {}
+        if need:
+            if run_class:
+                preds = self.posture.classify_many(frame, [people[i] for i in need])
+                by_idx = {i: (*p, "modelo") for i, p in zip(need, preds)}
+                self._last_class = [(people[i], *by_idx[i][:2]) for i in need]
+            else:
+                fresh = []
+                for i in need:
+                    prev = max(self._last_class or [],
+                               key=lambda c: iou(c[0], people[i]), default=None)
+                    if prev is not None and iou(prev[0], people[i]) > 0.3:
+                        by_idx[i] = (prev[1], prev[2], "modelo (cache)")
+                    else:
+                        fresh.append(i)          # persona nueva: se clasifica ya
+                if fresh:
+                    preds = self.posture.classify_many(frame,
+                                                       [people[i] for i in fresh])
+                    for i, p in zip(fresh, preds):
+                        by_idx[i] = (*p, "modelo")
+                        self._last_class = (self._last_class or []) + [(people[i], *p)]
         dets: list[dict] = []
         for i, box in enumerate(people):
             is_pose = geom is not None and i == pose_idx
             if is_pose:
                 name, conf_p, origin = geom, 0.55, "geometria de pose"
-            elif run_class or not self._last_class \
-                    or abs(self._last_class[0][0] - box[0]) > 64:
-                name, conf_p = self.posture.classify(frame, box)
-                self._last_class = (tuple(box), name, conf_p)
-                origin = "modelo"
             else:
-                _, name, conf_p = self._last_class
-                origin = "modelo (cache)"
+                name, conf_p, origin = by_idx.get(i, ("", 0.0, "modelo"))
             if not name:
                 name, conf_p, origin = "persona", 0.4, "sin clasificar"
 

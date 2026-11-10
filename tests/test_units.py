@@ -30,7 +30,8 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(s.engine.pose_every, 4)
         self.assertEqual(s.server.port, 8080)
         self.assertIs(s.enhancement.enabled, False)
-        self.assertTrue(str(s.detector_path).endswith("escaleras_s7_v4.pt"))
+        self.assertTrue(str(s.detector_path).endswith("escalera_v5.pt"))
+        self.assertTrue(str(s.posture_path).endswith("postura_v5.pt"))
 
     def test_thresholds_match_requirements(self):
         th = load_settings().thresholds
@@ -119,7 +120,7 @@ class HardwareProfileTest(unittest.TestCase):
         big = {"name": "NVIDIA GeForce RTX 5070 Laptop GPU", "vram_gb": 7.9,
                "capability": "12.0"}
         self.assertEqual(choose_profile("auto", big, 4.5), "normal")
-        self.assertEqual(choose_profile("auto", {}, 4.5), "normal")      # CPU
+        self.assertEqual(choose_profile("auto", {}, 4.5), "cpu")         # sin GPU
         self.assertEqual(choose_profile("baja_vram", big, 4.5), "baja_vram")
 
     def test_apply_profile_disables_fp16_and_shrinks_live_sr(self):
@@ -133,6 +134,79 @@ class HardwareProfileTest(unittest.TestCase):
         self.assertEqual(s.enhancement.live.input_max, 320)
         self.assertEqual(s.inference.imgsz, 640)     # la detección no cambia
         self.assertIn("enhancement.half", changes)
+
+    def test_cpu_profile_lightens_skeleton_and_resolves_path(self):
+        from backend.hardware import apply_profile
+        s = load_settings()
+        name, changes = apply_profile(s, {})          # sin GPU
+        self.assertEqual(name, "cpu")
+        self.assertTrue(str(s.skeleton.model_path).endswith("yolov8n-pose.pt"))
+        self.assertGreaterEqual(s.skeleton.every, 4)
+        self.assertIn("skeleton.model", changes)
+        # GPU presente pero device=cpu forzado: también perfil cpu
+        s2 = load_settings(overrides=["device=cpu"])
+        big = {"name": "NVIDIA GeForce RTX 5070", "vram_gb": 7.9,
+               "capability": "12.0", "arch_ok": True}
+        self.assertEqual(apply_profile(s2, big)[0], "cpu")
+
+
+class EngineCadenceTest(unittest.TestCase):
+    """Una etapa sin resultados (escena sin escalera / sin personas) debe
+    respetar su cadencia: antes corría en TODOS los fotogramas."""
+
+    def test_empty_stage_respects_cadence(self):
+        from backend.perception.engine import RiskEngine
+
+        calls = {"stairs": 0, "people": 0}
+
+        class FakePosture:
+            names = {3: "escalera"}
+            id_of = {"escalera": 3}
+
+            def stairs(self, frame, max_boxes=2):
+                calls["stairs"] += 1
+                return []                              # nunca hay escalera
+
+            def classify_many(self, frame, boxes):
+                return [("", 0.0)] * len(boxes)
+
+        class FakeCoco:
+            def people(self, frame):
+                calls["people"] += 1
+                return []                              # nunca hay personas
+
+            def obstacles(self, frame):
+                return []
+
+        s = load_settings()
+        eng = RiskEngine.__new__(RiskEngine)
+        eng.__dict__.update(
+            settings=s, device="cpu", conf=0.25, th=s.thresholds,
+            pose_every=10 ** 6, people_every=6, stairs_every=13,
+            obstacle_every=10 ** 6, classify_every=6, max_stairs_boxes=2,
+            posture=FakePosture(), coco=FakeCoco(), skeleton=None,
+            skeleton_every=1, _frame_no=0, _last_people=None,
+            _last_stairs=None, _last_obstacles=[], _last_geom=None,
+            _last_landmarks=None, _last_class=None, _last_skeletons=None,
+            _fall_held={}, _errors={"gpu": 0, "pose": 0, "deteccion": 0},
+            _error_prints={}, camera_connected=True)
+        from backend.perception.tracking import IoUTracker
+        from unittest import mock
+        eng.tracker = IoUTracker()
+        eng.pose = mock.Mock(analyse=lambda f: [])
+        eng.alerts = mock.MagicMock()
+        eng.alerts.update.return_value = []
+        frame = np.zeros((54, 96, 3), np.uint8)
+        for _ in range(26):
+            try:
+                eng.step(frame, allow_alerts=False)
+            except Exception:                          # noqa: BLE001
+                pass    # el resto del pipeline usa piezas falsas; solo se cuentan llamadas
+        # 26 fotogramas: escalera en el 1.º (no había resultado) + 13 y 26
+        self.assertGreaterEqual(calls["stairs"], 2)    # la etapa sí se alcanza
+        self.assertLessEqual(calls["stairs"], 3)
+        # personas: 1.º + 6, 12, 18, 24
+        self.assertLessEqual(calls["people"], 5)
 
 
 class LifecycleTest(unittest.TestCase):

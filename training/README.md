@@ -1,4 +1,41 @@
-# Entrenamiento (histórico)
+# Entrenamiento
+
+## Modelo v5 (actual, rama `modelo-v5`)
+
+El motor usa el modelo propio para dos tareas distintas, así que v5 son **dos
+redes pequeñas** entrenadas solo con `stairs_fallhuman`:
+
+| Modelo | Tarea | Base | Test | Latencia GPU / CPU | Tamaño |
+|---|---|---|---|---|---|
+| `models/detector/escalera_v5.pt` | detección de `escalera` (1 clase) a 512 px | YOLO11n | mAP50 0.802 · P 0.79 · R 0.77 | 11 / 26 ms | 5.5 MB |
+| `models/detector/postura_v5.pt` | clasificación del recorte de cada persona: `persona_caido` · `persona_sentado` · `persona_erguida` (224 px) | YOLO11n-cls | recall 95 % · 89 % · 99 % (media 94.3 %) | 7 / 10 ms | 3.2 MB |
+
+Por qué así:
+
+* **Postura = clasificador de recortes.** COCO ya localiza a cada persona; el
+  v4 pasaba cada recorte por un detector completo a 640 px. Un clasificador es
+  la herramienta correcta y cuesta una fracción.
+* **Los peatones de `tracking/` (MOT15) pasan a ser `persona_erguida`.** En v4
+  eran una clase `persona` aparte que competía con `persona_erguida`; aquí
+  aportan lo que faltaba (cámara alta, personas pequeñas o de espaldas).
+* **Las variantes `s` se probaron y se descartaron:** postura-s fue peor (media
+  89.4 %, sobreajusta con tan pocos datos) y escalera-s solo +2.5 puntos de
+  mAP50 al doble de coste en CPU.
+* `persona_desequilibrio` (pre-caída) no tiene datos en `stairs_fallhuman`; la
+  detecta el esqueleto (`backend/perception/skeleton/`), no el modelo.
+
+Advertencia honesta: el test de postura es pequeño (41 caído, 18 sentado, 15
+de pie de fotos + 150 peatones) y las fotos de `fall/` son de stock; falta
+validar con vídeo real de la escalera (vista en diagonal).
+
+```bash
+scripts/get_dataset.sh                    # o: hf download andres31416/stairs_fallhuman --repo-type dataset --local-dir stairs_fallhuman
+python training/prepare_v5.py             # -> datasets/v5_postura, datasets/v5_escalera
+bash training/run_v5_all.sh               # entrena n y s de ambos en la GPU -> runs/v5/*/v5_metrics.json
+python tools/bench_engine.py              # rendimiento del motor completo (añade --set device=cpu)
+```
+
+## Histórico (v3 / v4)
 
 Scripts y configuraciones con los que se construyeron los datasets y se
 entrenaron los modelos. **No hace falta ejecutarlos para usar el sistema**, y en
