@@ -180,7 +180,7 @@
   #sysConfirm .danger:hover { background:#951b1b; }
   #sysConfirm button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
   /* Easter egg: el kitsune camina por los bordes al apagar el sistema */
-  #kitsune { position:fixed; left:0; top:0; z-index:10001; pointer-events:none; display:none;
+  #kitsune { position:fixed; left:0; top:0; z-index:10003; pointer-events:none; display:none;
              image-rendering:pixelated; background-repeat:no-repeat; will-change:transform; }
   @media (max-width: 900px) { .grid { grid-template-columns:1fr; } }
 </style>
@@ -1307,7 +1307,7 @@ function confirmarApagado() {
       dlg.classList.remove('on');
       document.removeEventListener('keydown', onKey, true);
       $('#sysConfirm-yes').onclick = $('#sysConfirm-no').onclick = dlg.onclick = null;
-      if (!ok && prev && prev.focus) prev.focus();
+      if (!ok) { stopKitsune(); if (prev && prev.focus) prev.focus(); }
       resolve(ok);
     };
     const onKey = (e) => {
@@ -1326,24 +1326,41 @@ function confirmarApagado() {
     document.addEventListener('keydown', onKey, true);
     dlg.classList.add('on');
     $('#sysConfirm-no').focus();
+    // el kitsune camina por el borde de esta caja mientras está abierta
+    startKitsune(() => kitsuneRect($('#sysConfirm.on .box')));
   });
 }
 
 // ---------- easter egg: el kitsune ----------
-// Al apagar el sistema, un zorrito camina por los cuatro bordes de la
-// pantalla, con los pies pegados a cada borde. La imagen se precarga en
-// memoria al abrir el panel: cuando aparece, el servidor ya puede estar
-// apagado. Con «reducir movimiento» se queda sentado abajo, sin caminar.
-const KITSUNE = { url: null, frames: 10, fw: 69, fh: 64, scale: 1.5, fps: 12, speed: 140, raf: 0 };
+// Un zorrito camina por el borde de la caja «¿Seguro que quieres apagar el
+// sistema?», con los pies pegados al borde (encima, por el lado derecho,
+// boca abajo por debajo y por el lado izquierdo). Si se confirma, sigue
+// caminando alrededor del mensaje «Sistema detenido»; si se cancela, se va.
+// La imagen se precarga en memoria al abrir el panel: cuando el zorro sigue
+// en pantalla, el servidor ya puede estar apagado. Con «reducir movimiento»
+// se queda quieto encima de la caja.
+const KITSUNE = { url: null, frames: 10, fw: 69, fh: 64, scale: 0.5, fps: 12,
+                  speed: 70, raf: 0, target: null, t0: 0 };
 fetch('/static/kitsune.png').then(r => r.ok ? r.blob() : null)
   .then(b => { if (b) KITSUNE.url = URL.createObjectURL(b); }).catch(() => {});
 
-function startKitsune() {
+// rectángulo que rodea a uno o varios elementos visibles
+function kitsuneRect(...els) {
+  const rs = els.filter(Boolean).map(e => e.getBoundingClientRect()).filter(r => r.width && r.height);
+  if (!rs.length) return null;
+  const l = Math.min(...rs.map(r => r.left)), t = Math.min(...rs.map(r => r.top));
+  const r = Math.max(...rs.map(r => r.right)), b = Math.max(...rs.map(r => r.bottom));
+  return { left: l, top: t, right: r, bottom: b };
+}
+
+function startKitsune(target) {
   const el = $('#kitsune');
+  KITSUNE.target = target;                 // función que devuelve el rectángulo a rodear
   if (!KITSUNE.url || !el) return;
+  if (KITSUNE.raf) return;                 // ya camina: solo cambia de caja
   const s = KITSUNE.scale, w = KITSUNE.fw * s, h = KITSUNE.fh * s;
   Object.assign(el.style, {
-    display: 'block', width: w + 'px', height: h + 'px',
+    width: w + 'px', height: h + 'px',
     backgroundImage: `url(${KITSUNE.url})`,
     backgroundSize: `${KITSUNE.fw * KITSUNE.frames * s}px ${h}px`,
   });
@@ -1352,22 +1369,26 @@ function startKitsune() {
     el.style.backgroundPosition = `${-frame * w}px 0`;
     el.style.transform = `translate(${cx - w / 2}px, ${cy - h / 2}px) rotate(${ang}deg)`;
   };
-  if (quiet) { place(innerWidth / 2, innerHeight - h / 2 - 8, 0, 0); return; }
-  const t0 = performance.now();
+  KITSUNE.t0 = performance.now();
   const step = (now) => {
-    // rectángulo que recorre el centro del zorro: a media altura de cada borde
-    const L = h / 2, T = h / 2, R = innerWidth - h / 2, B = innerHeight - h / 2;
+    const box = KITSUNE.target && KITSUNE.target();
+    if (!box) { el.style.display = 'none'; KITSUNE.raf = requestAnimationFrame(step); return; }
+    el.style.display = 'block';
+    // recorrido del CENTRO del zorro: a media altura por fuera de cada borde
+    const L = box.left - h / 2, R = box.right + h / 2;
+    const T = box.top - h / 2,  B = box.bottom + h / 2;
+    if (quiet) { place((box.left + box.right) / 2, T, 0, 0); KITSUNE.raf = requestAnimationFrame(step); return; }
     const segs = [                                   // [desde, hasta, ángulo]
-      [[L, B], [R, B], 0],     // abajo, hacia la derecha
-      [[R, B], [R, T], -90],   // pared derecha, subiendo
-      [[R, T], [L, T], 180],   // techo, hacia la izquierda
-      [[L, T], [L, B], 90],    // pared izquierda, bajando
+      [[L, T], [R, T], 0],     // encima de la caja, hacia la derecha
+      [[R, T], [R, B], 90],    // lado derecho, bajando (pies hacia la caja)
+      [[R, B], [L, B], 180],   // debajo, boca abajo, hacia la izquierda
+      [[L, B], [L, T], 270],   // lado izquierdo, subiendo
     ];
     const lens = segs.map(([a, b]) => Math.hypot(b[0] - a[0], b[1] - a[1]));
     const total = lens.reduce((x, y) => x + y, 0);
-    const t = (now - t0) / 1000;
+    const t = (now - KITSUNE.t0) / 1000;
     let d = (t * KITSUNE.speed) % total, i = 0;
-    while (d > lens[i]) { d -= lens[i]; i++; }
+    while (i < 3 && d > lens[i]) { d -= lens[i]; i++; }
     const [[ax, ay], [bx, by], ang] = segs[i], k = lens[i] ? d / lens[i] : 0;
     place(ax + (bx - ax) * k, ay + (by - ay) * k, ang, Math.floor(t * KITSUNE.fps) % KITSUNE.frames);
     KITSUNE.raf = requestAnimationFrame(step);
@@ -1376,12 +1397,14 @@ function startKitsune() {
 }
 function stopKitsune() {
   cancelAnimationFrame(KITSUNE.raf);
+  KITSUNE.raf = 0; KITSUNE.target = null;
   const el = $('#kitsune'); if (el) el.style.display = 'none';
 }
 
 async function detenerSistema() {
   if (!(await confirmarApagado())) return;
-  startKitsune();
+  // sigue caminando, ahora alrededor del mensaje «Deteniendo / Sistema detenido»
+  startKitsune(() => kitsuneRect($('#stopped-t'), $('#stopped-m')));
   try { stopCam(); } catch (e) {}
   try { window.imagenPanel && window.imagenPanel.stop(); } catch (e) {}
   try { const ap = typeof initAudioPanel === 'function' && initAudioPanel();
