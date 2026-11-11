@@ -1,0 +1,52 @@
+# Pruebas automáticas: en cada push a las ramas principales y en cada pull
+# request se instala el entorno (CPU) y se ejecutan TODAS las pruebas
+# (vídeo, esqueleto, zona, instalador... y las de los módulos de audio e
+# imagen), incluida la prueba de humo con los modelos reales.
+name: Pruebas
+
+on:
+  push:
+    branches: [expo, modelo-v5, main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pruebas-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      PYTHONNOUSERSITE: "1"
+      UV_LINK_MODE: copy
+      YOLO_CONFIG_DIR: ${{ github.workspace }}/.cache/ultralytics
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Librerías del sistema (OpenCV / MediaPipe / audio)
+        run: sudo apt-get update -q && sudo apt-get install -y -q libgl1 libglib2.0-0 libegl1 libsndfile1 ffmpeg
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: requirements/*.txt
+
+      - name: Python 3.12 y paquetes (PyTorch CPU)
+        run: |
+          uv venv .venv --python 3.12 --seed
+          uv pip install --python .venv/bin/python -r requirements/torch-cpu.txt
+          uv pip install --python .venv/bin/python -r requirements/dev.txt
+
+      - name: Comprobación del instalador (paquetes y versiones)
+        run: .venv/bin/python -c "import sys; sys.path.insert(0, 'tools'); import install as I; m = [p for f in ('base.txt', 'modulos.txt') for p in I.check(I.REQ / f)]; sys.exit(1 if m else 0)"
+
+      - name: Modelos (descarga y verificación SHA-256)
+        run: .venv/bin/python tools/download_models.py
+
+      - name: Pruebas
+        run: .venv/bin/python -m pytest -q

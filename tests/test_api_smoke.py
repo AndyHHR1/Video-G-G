@@ -14,7 +14,8 @@ import cv2
 from backend.config import load_settings
 
 SETTINGS = load_settings()
-HAVE_MODELS = SETTINGS.detector_path.is_file() and SETTINGS.coco_path.is_file()
+HAVE_MODELS = (SETTINGS.detector_path.is_file() and SETTINGS.posture_path.is_file()
+               and SETTINGS.coco_path.is_file())
 
 
 @unittest.skipUnless(HAVE_MODELS, "faltan pesos: python tools/download_models.py")
@@ -24,7 +25,12 @@ class ApiSmokeTest(unittest.TestCase):
         import ultralytics
         from backend.app import create_app
         cls.tmp = tempfile.TemporaryDirectory()
-        settings = load_settings(overrides=[f"alerts.dir={cls.tmp.name}"])
+        # TODO en una carpeta temporal: test_alert_routes borra «todas las
+        # alertas», y eso incluye las de AUDIO. Antes solo se aislaban las de
+        # vídeo y las de audio iban a outputs/audio_alerts/ (datos reales).
+        settings = load_settings(overrides=[
+            f"alerts.dir={cls.tmp.name}",
+            f"modules.audio.options.alerts_file={cls.tmp.name}/audio/alertas.jsonl"])
         cls.app = create_app(settings)
         cls.client = cls.app.test_client()
         assets = Path(ultralytics.__file__).parent / "assets"
@@ -50,7 +56,8 @@ class ApiSmokeTest(unittest.TestCase):
 
     def test_health_reports_profile_and_modules(self):
         d = self.client.get("/api/health").get_json()
-        self.assertIn(d["hardware"]["perfil"], ("normal", "baja_vram"))
+        # "cpu" en máquinas sin GPU (p. ej. las pruebas automáticas de GitHub)
+        self.assertIn(d["hardware"]["perfil"], ("normal", "baja_vram", "cpu"))
         self.assertTrue(d["modulos"]["audio"]["ok"], d["modulos"]["audio"])
         self.assertTrue(d["modulos"]["imagen"]["ok"], d["modulos"]["imagen"])
 
@@ -79,10 +86,18 @@ class ApiSmokeTest(unittest.TestCase):
         jpg = cv2.imencode(".jpg", cv2.resize(img, (960, 540)))[1].tobytes()
         d = None
         import time
-        for fid in range(1, 80):                 # asíncrono: los primeros pueden ir vacíos
+        # asíncrono: los primeros pueden ir vacíos. Hasta ~10 s: con la GPU
+        # compartida (p. ej. el panel abierto a la vez) ByteTrack tardaba más
+        # de 4 s en confirmar la identidad del esqueleto y la prueba fallaba de
+        # forma intermitente. Sale en cuanto está listo.
+        for fid in range(1, 200):
             d = self.client.post(f"/api/frame?overlay=0&sr=1&fid={fid}", data=jpg,
                                  content_type="image/jpeg").get_json()
-            if not d.get("pendiente") and d["detections"]:
+            # Esperar también a un esqueleto con identidad: ByteTrack necesita
+            # varios fotogramas para confirmar el ID y el esqueleto corre a su
+            # cadencia (skeleton.every), no en cada fotograma.
+            if not d.get("pendiente") and d["detections"] and any(
+                    x.get("id") is not None for x in d.get("esqueletos", [])):
                 break
             time.sleep(0.05)                     # ritmo de cámara, no ráfaga
         boxes = [x["bbox"] for x in d["detections"] if "bbox" in x]
@@ -101,8 +116,43 @@ class ApiSmokeTest(unittest.TestCase):
         self.assertEqual(f["metadata_captura"]["fuente"], "video_en_vivo")
 
     def test_alert_routes(self):
+        # las alertas de audio de esta app de prueba van a la carpeta temporal
+        audio = [s for s in self.app.extensions["escaleras"].alert_sources
+                 if getattr(s, "name", "") == "audio"]
+        for src in audio:
+            path = str(getattr(src, "path", "") or getattr(src, "alerts_file", "")
+                       or getattr(getattr(src, "store", None), "path", ""))
+            if path:
+                self.assertTrue(path.startswith(self.tmp.name), path)
         self.assertEqual(self.client.get("/api/alerts").status_code, 200)
         self.assertEqual(self.client.delete("/api/alertas").status_code, 200)
+
+    def test_zone_api(self):
+        import time
+        from backend.perception.zone import Zone
+        rt = self.app.extensions["escaleras"]
+        for _ in range(200):                      # el motor se crea en su hilo
+            if getattr(rt.inferencer, "engine", None) is not None:
+                break
+            time.sleep(0.05)
+        eng = rt.inferencer.engine
+        # archivo temporal: la prueba nunca toca configs/zona_local.json real
+        eng.zone_path = Path(self.tmp.name) / "zona.json"
+        eng.set_zone(Zone())
+        zona = {"escalera": [[0.3, 0.2], [0.7, 0.2], [0.8, 0.9], [0.2, 0.9]],
+                "pasamanos": [[[0.25, 0.3], [0.25, 0.85]]]}
+        r = self.client.post("/api/zona", json=zona)
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(eng.zone.has_stairs and eng.zone.has_rails)
+        self.assertTrue(eng.zone_path.is_file())
+        self.assertEqual(self.client.get("/api/zona").get_json()["escalera"],
+                         zona["escalera"])
+        bad = self.client.post("/api/zona", json={"escalera": [[0, 0], [5, 5], [1, 1]]})
+        self.assertEqual(bad.status_code, 400)
+        self.assertTrue(eng.zone.has_stairs)      # una zona mala no pisa la buena
+        self.assertEqual(self.client.delete("/api/zona").status_code, 200)
+        self.assertFalse(eng.zone.has_stairs)
+        self.assertFalse(eng.zone_path.exists())
 
 
 if __name__ == "__main__":

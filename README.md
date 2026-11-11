@@ -7,6 +7,53 @@ el celular y objetos abandonados en los escalones**. Incluye un panel web con la
 cámara en vivo y una opción de **mejora de calidad de vídeo (Real-ESRGAN x4)**
 que funciona de forma fluida en tiempo real.
 
+## 🚀 Instalar y usar (sin escribir comandos)
+
+### Windows: doble clic y esperar
+
+1. **Descarga el proyecto.** En esta página de GitHub, botón verde
+   **«Code» → «Download ZIP»**.
+   *(Si estás viendo otra rama, elige antes `modelo-v5` en el selector de ramas,
+   arriba a la izquierda.)*
+2. **Descomprímelo** donde quieras (clic derecho sobre el ZIP → «Extraer
+   todo»). Mejor en una **ruta corta**, por ejemplo `D:\Escaleras`: Windows
+   limita la longitud de las rutas y algunas librerías traen carpetas muy
+   profundas.
+3. Abre la carpeta y haz **doble clic en `instalar.bat`**. Se abre una ventana
+   negra que lo hace todo sola. **Espera** a que diga **«Instalación
+   completa»** y pulsa una tecla para cerrarla.
+
+**Ya está.** En el Escritorio aparece **«Sistema Escaleras»**: **doble clic** y
+el sistema arranca y abre el panel en el navegador. Para apagarlo, cierra esa
+ventana negra o pulsa **«⏻ Detener sistema»** en el panel.
+
+Bueno saberlo:
+
+- **No hace falta instalar nada antes** (ni Python ni otros programas) ni
+  permisos de administrador. Todo queda **dentro de la carpeta** del proyecto:
+  para desinstalarlo, borra la carpeta y el acceso directo.
+- **La primera vez tarda**: descarga ~1,5 GB sin tarjeta gráfica o ~4 GB con
+  tarjeta NVIDIA (entre 5 y 30 minutos según tu internet). Las siguientes
+  veces arranca en segundos.
+- Si la instalación se corta (internet, apagón...), **vuelve a hacer doble
+  clic en `instalar.bat`**: continúa y solo instala lo que falta.
+- Si Windows muestra **«Windows protegió su PC»**, pulsa **«Más información» →
+  «Ejecutar de todas formas»** (pasa con cualquier archivo descargado de
+  internet).
+- Con **tarjeta NVIDIA** el sistema la usa sola; **sin ella** funciona igual
+  con el procesador (más lento, con aceleración OpenVINO).
+- La primera vez, el navegador pedirá **permiso para usar la cámara**.
+
+### Linux / macOS
+
+Descomprime el proyecto, abre una terminal en la carpeta y escribe
+`./instalar.sh` (es el único comando). Después usa el acceso directo
+**«Sistema Escaleras»** del menú de aplicaciones o del Escritorio.
+
+*(Detalles técnicos de la instalación: [§2](#2-instalación).)*
+
+---
+
 El vídeo trabaja **solo en vivo** (no se suben vídeos ni imágenes al motor de
 vídeo). Junto a él hay dos **módulos aparte**, integrados desde los repositorios
 de los otros grupos sin modificar el vídeo:
@@ -20,7 +67,7 @@ Funciona en una **GTX 1650 (4 GB)**: el perfil `baja_vram` se activa solo (§4.5
 y el panel tiene un botón **«Detener sistema»** que apaga todo de forma ordenada.
 
 > Universidad Privada Antenor Orrego · Curso de Percepción Computacional · 2026
-> Rama `expo` · Modelo **S7 v4** (release `v1.2.0-escaleras-v4`, definitivo, no se reentrena)
+> Rama `modelo-v5` · **Modelo v5** (escalera YOLO11n + postura YOLO11n-cls, entrenado con `stairs_fallhuman`). El Modelo S7 v4 sigue en la rama `expo`.
 
 ![Arquitectura](docs/img/arquitectura.png)
 
@@ -51,11 +98,11 @@ y el panel tiene un botón **«Detener sistema»** que apaga todo de forma orden
 | Lo que pide el cliente | Cómo lo resuelve el sistema |
 |---|---|
 | Ver en la interfaz a las personas caminando por la escalera (cámara en vivo) | Pestaña **Cámara en vivo**: la webcam del navegador (o una cámara IP vía `/api/stream`) se analiza a ~30 fps y las cajas se dibujan sobre el vídeo. |
-| Detectar **persona de pie erguida** | Clase `persona_erguida` (riesgo BAJO) por geometría de pose (MediaPipe) o por el detector propio. |
+| Detectar **persona de pie erguida** | Clase `persona_erguida` (riesgo BAJO) por el clasificador del Modelo v5, verificada por las reglas del esqueleto de cada persona. |
 | Detectar **pérdida de equilibrio** | Clase `persona_desequilibrio` + señal `tambaleo` (inclinación del tronco > 12°, asimetría de rodillas). Riesgo ALTO. |
 | Detectar **persona distraída** | Señal `distraccion`: mano junto a la cara con cabeza inclinada, o un **celular** (COCO) a menos de 0.14 del rostro. Riesgo MEDIO. |
 | Detectar **no uso del pasamanos** | Señal `sin_pasamanos`: ninguna muñeca a la altura de la barandilla y brazo separado del tronco. Riesgo MEDIO. |
-| Detectar **anomalías en la escalera** (objetos, estorbos) | YOLOv8s COCO: mochila, bolso, maleta, botella, libro, paraguas → `obstaculo_escalon` (ALTO); mobiliario como contexto. |
+| Detectar **anomalías en la escalera** (objetos, estorbos) | YOLOv8s COCO: mochila, bolso, maleta, botella, libro, paraguas → `obstaculo_escalon` (MEDIO: riesgo a vigilar; el rojo queda para caídas y desequilibrio); mobiliario como contexto. |
 | Opción para ver la imagen en vivo **con mejora de calidad** | Casilla **«Mejora de calidad (Real-ESRGAN x4)»**: Real-ESRGAN x4 (`realesr-general-x4v3`) en un hilo propio, ~22 ms por cuadro → el vídeo mejorado se ve fluido (~29 fps medidos). |
 | Solo vídeo en vivo | Se eliminaron las pestañas y rutas de imagen y vídeo **subidos** (`/api/detect`, `/api/video`) y el modelo de SR que solo usaban ellas. |
 | Funcionar en una **GTX 1650** | Perfil `baja_vram` automático: Real-ESRGAN en FP32 y entrada de 320 px. Pico medido con todo activo: **0.32 GB de VRAM** (§4.5). |
@@ -74,7 +121,31 @@ Requisitos: **Python 3.10 – 3.12**, Linux / WSL2 / macOS / Windows. GPU NVIDIA
 opcional (recomendada; mínimo probado: perfil de **GTX 1650, 4 GB**). Todo se instala **dentro de un entorno
 virtual**: no se ensucia el sistema.
 
-### 2.1 Instalación automática (Linux / WSL2)
+### 2.0 Instalador con doble clic (recomendado, cualquier máquina)
+
+```text
+Windows ............ doble clic en  instalar.bat
+Linux / WSL / Mac .. ./instalar.sh
+(añadir --cpu para forzar la versión sin GPU)
+```
+
+El instalador **comprueba cada paquete y solo instala lo que falta** (o no
+tiene la versión correcta), así que se puede repetir sin miedo:
+
+1. Descarga **uv** (gestor de Python de Astral) e instala **Python 3.12**: no
+   hace falta tener Python ni permisos de administrador.
+2. Crea el entorno `.venv` y detecta la GPU: **NVIDIA → PyTorch CUDA 12.8**;
+   sin GPU → PyTorch CPU + **OpenVINO** (2-4× más rápido en procesador).
+3. Comprueba e instala `requirements/` (base, módulos de audio e imagen).
+4. Descarga y verifica (SHA-256) los modelos, y hace un diagnóstico.
+5. Crea el **arrancador**: `iniciar.bat` / `iniciar.sh` y un acceso directo
+   **«Sistema Escaleras»** en el Escritorio (en WSL, en el Escritorio de
+   Windows). Doble clic → arranca el sistema y abre el panel en el navegador.
+
+**Todo queda dentro de la carpeta del proyecto** (`.tools/`, `.python/`,
+`.venv/`, `.cache/`): no toca el sistema y se borra borrando la carpeta.
+
+### 2.1 Instalación automática con setup.sh (Linux / WSL2)
 
 ```bash
 git clone https://github.com/AndyHHR1/Video-G-G.git
@@ -180,7 +251,7 @@ scripts/run.sh                       # equivalente a: python -m backend
 | `--profile baja_vram` | Forzar el perfil de GTX 1650 (`auto` lo elige solo) |
 | `--no-audio` / `--no-imagen` | Arrancar sin uno de los módulos aparte |
 | `--stop` | Detener un servidor que ya está corriendo y salir |
-| `--conf 0.3` | Umbral por defecto del detector |
+| `--conf 0.3` | Sensibilidad inicial (confianza mínima de persona; ver «Sensibilidad» abajo) |
 | `--set clave.sub=valor` | Cambiar cualquier valor de `configs/app.yaml` sin editarlo |
 | `--config otro.yaml` | Usar otra configuración (por ejemplo, otra escalera) |
 
@@ -196,6 +267,33 @@ PANEL_TOKEN="un-secreto-largo" scripts/run.sh --host 0.0.0.0
 **Pestañas del panel:**
 
 - **Cámara en vivo:** webcam del navegador. La casilla **«Mejora de calidad (Real-ESRGAN x4)»** activa la mejora en tiempo real (~29 fps). Sus alertas incluyen también las acústicas (marcadas «audio»).
+  - **Cuadros y esqueletos intermitentes:** aparecen ~3 s cuando entra alguien y 1.5 s cada 8 s; los riesgos (naranja/rojo) se ven siempre. Casilla **«Mostrar siempre cuadros y esqueletos»** para fijarlos.
+  - **«Sonido de alertas»:** tres pitidos agudos si llega una alerta crítica, uno grave si es de precaución (solo en ese navegador; se activa con el primer clic en la página).
+  - **«Sensibilidad»** (barra, por defecto 0.20): ver la sección siguiente. Debajo de la barra el panel explica en una línea qué hace el valor elegido y qué se sacrifica.
+
+**Sensibilidad: qué es y cómo funciona.** Es la **confianza mínima para
+aceptar que algo es una persona**. El detector COCO da a cada posible persona
+una puntuación de 0 a 1; solo las que superan la sensibilidad pasan al resto
+del sistema (postura, esqueleto, seguimiento y alertas). Se cambia en vivo
+desde el panel (se envía con cada fotograma como `conf`) y el valor inicial es
+`inference.conf` en `configs/app.yaml`. Solo afecta a las **personas**: los
+objetos, la escalera y la postura tienen sus propios umbrales fijos.
+
+| Valor | Qué hace | Qué se sacrifica |
+|---|---|---|
+| **0.05 – 0.10** · muy sensible | Detecta personas lejanas, pequeñas o tapadas por el pasamanos | Más detecciones falsas (sombras, abrigos colgados, objetos) y algo más de trabajo para el equipo: cada «persona» se clasifica y se sigue |
+| **0.15 – 0.25** · equilibrado (recomendado, 0.20) | Buen balance entre no perder personas y no inventarlas | Alguna persona muy lejana o muy tapada puede no detectarse |
+| **0.30 – 0.40** · estricto | Solo personas claras: menos detecciones falsas | Puede no ver a personas lejanas, de espaldas o tapadas, y por tanto no analizar su postura |
+| **0.45 – 0.60** · muy estricto | Solo personas claras y cercanas | Puede perder caídas de personas lejanas o tapadas: no recomendado para vigilancia |
+
+Medido en vivo con una escena de calle de ~16 personas (MOT15): a **0.05**
+salen ~17 por fotograma pero con picos de 28 (detecciones falsas); a
+**0.20**, ~16 estables; a **0.60**, ~8 (se pierde la mitad de la gente).
+
+Una persona que no se detecta no tiene postura, esqueleto asociado ni
+alertas; por eso, ante la duda, es mejor quedarse en el rango equilibrado y
+usar la **zona dibujada** para descartar a la gente que no está en la escalera.
+  - **«Configurar zona»:** con la cámara conectada, marca con clics el **contorno de la escalera** y la(s) **línea(s) del pasamanos** y pulsa «Guardar zona». Desde entonces, las personas fuera de la escalera no generan riesgos ni alertas, solo cuentan como obstáculo los objetos dentro de ella y «sin pasamanos» se mide con la línea real (mano a menos de medio torso). Se guarda en `configs/zona_local.json` (propia de cada instalación); «Borrar todo» + «Guardar zona» vuelve a analizar toda la imagen.
 - **🎙 Audio** (módulo `modulos/audio`): micrófono en vivo con vúmetro y métricas (pisadas/s, factor de cresta, F0, pico RMS), sensibilidad alta/media/baja, pitido y notificaciones, demostración con la sesión simulada de `final.py` y análisis de un archivo **de audio**. Puede funcionar a la vez que la cámara.
 - **🖼 Imagen** (módulo `modulos/imagen`): fotografía o cámara; calidad óptica, preprocesamiento (adaptativo / original / CLAHE / gamma), personas y celulares (YOLO11n), articulaciones (YOLO11n-Pose) y el JSON completo. «Características del vídeo en vivo» lee el último fotograma del vídeo sin alterarlo.
 - **Clases:** leyenda de clases y su relación con los requisitos.
@@ -250,8 +348,8 @@ flowchart TB
     end
     subgraph CORE["núcleo"]
         ENG["perception/engine.py<br/>RiskEngine.step()"]
-        DET["perception/detectors.py<br/>COCO + Modelo S7 v4"]
-        POSE["perception/pose.py<br/>MediaPipe Pose"]
+        DET["perception/detectors.py<br/>COCO + Modelo v5"]
+        POSE["perception/skeleton/<br/>YOLOv8-Pose por persona"]
         TRK["perception/tracking.py<br/>IoU tracker"]
         ALM["perception/alerts.py<br/>persistencia + evidencia"]
         SR["enhancement/<br/>Real-ESRGAN x4"]
@@ -317,12 +415,12 @@ Claves del diseño:
 
 ```
 fotograma ─► 1 personas (YOLOv8s COCO) ──────────────┐
-          ─► 2 escalera (Modelo S7 v4) ──────────────┤
-          ─► 3 pose (MediaPipe) → señales ───────────┤
+          ─► 2 escalera (Modelo v5, detector) ───────┤
+          ─► 3 esqueletos (YOLOv8-Pose) → señales ───┤
           ─► 4 objetos (YOLOv8s COCO) ───────────────┤
                                                      ▼
           5 postura por persona: geometría de pose (si es la persona emparejada)
-                                 o recorte → Modelo S7 v4
+                                 o recortes (en lote) → Modelo v5, clasificador
           6 seguimiento IoU → identidad estable (RQF05)
             caída por recorte: MEDIO «REVISAR» hasta 3 fotogramas seguidos → ALTO
           7 celular junto a la cara → distracción (RQF02-3)
@@ -355,7 +453,7 @@ tiene ≤ 4.5 GB o es una GTX 16xx, aplica el perfil `baja_vram`
 |---|---|---|---|
 | `enhancement.half` (FP16 en Real-ESRGAN) | sí | **no** | Las GTX 16xx tienen fallos conocidos con media precisión (NaN / imagen negra) |
 | `enhancement.live.input_max` | 480 px | **320 px** | ~2.2× menos trabajo de SR: deja GPU libre para la detección |
-| Detección (S7 v4, 640 px) | igual | igual | El modelo se entrenó a 640 px y **no se reentrena** |
+| Modelo v5 (escalera 512 px, postura 224 px) | igual | igual | Ya es ligero (YOLO11n / YOLO11n-cls) y se entrenó a esas resoluciones |
 | Modelos de imagen (YOLO11) | carga en el primer uso | igual | No ocupan VRAM hasta que se usa la pestaña Imagen |
 
 Además se quitó el modelo grande `RealESRGAN_x4plus` (16.7 M parámetros), que
@@ -407,8 +505,9 @@ El único cambio a su código es que los modelos se cargan en el primer uso desd
 
 `backend/perception/skeleton/` — pensado para **cámara alta en diagonal (vista
 picada), varias personas y un pasamanos que tapa parte del cuerpo**. Corre
-dentro del motor de riesgo (etapa 3b, cada `skeleton.every` fotogramas) junto a
-MediaPipe, que sigue dando las señales de pasamanos y distracción.
+dentro del motor de riesgo (etapa 3, cada `skeleton.every` fotogramas) y da,
+**por cada persona**, el equilibrio, el seguro de postura y las señales de
+pasamanos y distracción (`signals.py`), que antes venían de MediaPipe Pose.
 
 | Paso | Archivo | Qué hace |
 |---|---|---|
@@ -418,6 +517,25 @@ MediaPipe, que sigue dando las señales de pasamanos y distracción.
 | Equilibrio | `balance.py` | Votos de 5 criterios + persistencia + enfriamiento; un criterio que no se puede ver (tobillos tapados) no vota. |
 | Orquestación | `analyzer.py` | Estado por identidad; olvida IDs no vistos en `forget_s`. |
 | Morfología | `morphology.py` | **Omitida** por defecto: medida, no mejora (ver abajo). |
+| **Seguro de postura** | `posture_rules.py` | Reglas geométricas **independientes del modelo**, por persona (ver abajo). |
+
+**Seguro de postura por reglas (independiente del modelo).** Cada esqueleto
+se clasifica también con reglas sobre sus puntos, en torsos de esa persona
+(`configs/app.yaml → skeleton.postura`):
+
+| Veredicto | Criterios |
+|---|---|
+| **Caído** (≥ 3, o 2 si uno es de cuerpo tendido) | manos a la altura de los pies · cabeza a la altura de la cadera · puntos más anchos que altos · eje hombros→tobillos casi horizontal |
+| **Postura incorrecta** (≥ 2) | cadera a la altura de las rodillas · **ambas** rodillas dobladas · cadera y tobillos juntos |
+| **De pie** | ningún criterio y cabeza, cadera, rodillas y tobillos visibles a su altura normal |
+
+Funciona como seguro en los dos sentidos (`RiskEngine._link_posture`): si el
+esqueleto ve una caída y el modelo no, gana el esqueleto (ALTO); si el modelo
+ve una caída en el recorte pero el esqueleto está claramente de pie, gana el
+esqueleto (de pie, sin alerta). Un criterio que no se ve (pasamanos) no vota, y el
+estado debe sostenerse (0.6 s caído, 1 s postura) para confirmarse.
+Agacharse a recoger algo (manos a los pies, cabeza a la cadera, cuerpo no
+tendido) no cuenta como caída; subir un escalón dobla una sola rodilla.
 
 **Vista picada.** La vertical de la imagen no es la del mundo. Dos defensas:
 (1) el ángulo del tronco se compara con la **línea base propia** de cada
@@ -458,67 +576,60 @@ masa).
 
 ## 5. Arquitectura de los modelos
 
-El sistema combina **cuatro redes**. Solo la primera es propia del proyecto.
+El sistema combina varias redes. Solo las dos del Modelo v5 son propias del
+proyecto.
 
-### 5.1 Modelo S7 v4 — detector propio (YOLOv8s, 6 clases)
+### 5.1 Modelo v5 — escalera + postura (rama `modelo-v5`)
 
-`models/detector/escaleras_s7_v4.pt` · SHA-256 `b6a04f2f…d7ed` · release
-[`v1.2.0-escaleras-v4`](https://github.com/AndyHHR1/Video-G-G/releases/tag/v1.2.0-escaleras-v4).
-**Es el modelo definitivo: en esta rama no se reentrena ni se modifica.**
+Entrenado solo con [`stairs_fallhuman`](https://huggingface.co/datasets/andres31416/stairs_fallhuman)
+(`training/prepare_v5.py`, `training/train_v5.py`). Sustituye al Modelo S7 v4
+(YOLOv8s de 6 clases, que se conserva en la rama `expo`). El motor usaba el
+modelo propio para dos tareas distintas, así que v5 son **dos redes pequeñas**:
 
-| Bloque | Detalle |
-|---|---|
-| Backbone | CSPDarknet con bloques **C2f** (convoluciones 3×3 + concatenación de gradientes parciales) y **SPPF** al final para campo receptivo amplio. |
-| Neck | **PAN-FPN**: fusiona mapas a 3 escalas (strides 8, 16, 32) arriba-abajo y abajo-arriba, para personas cercanas y lejanas. |
-| Head | **Anchor-free y desacoplado**: ramas separadas para caja (DFL, *Distribution Focal Loss*) y clase (BCE). |
-| Tamaño | 11.1 M parámetros · ~28.6 GFLOPs a 640 px · 22 MB |
-| Entrada | 640×640 (letterbox) |
-| Clases | `0 persona_caido` · `1 persona_sentado` · `2 persona_erguida` · `3 escalera` · `4 persona` · `5 persona_desequilibrio` |
+| Modelo | Tarea | Base · entrada | Test (nunca visto) | GPU / CPU | Tamaño |
+|---|---|---|---|---|---|
+| `models/detector/escalera_v5.pt` | detectar `escalera` en el fotograma | YOLO11n · 512 px | mAP@0.5 **0.802** · P 0.79 · R 0.77 | 11 / 26 ms | 5.5 MB |
+| `models/detector/postura_v5.pt` | postura del recorte de cada persona | YOLO11n-cls · 224 px | recall caído **95 %** · sentado **89 %** · erguido **99 %** (media 94.3 %) | 7 / 10 ms | 3.2 MB |
 
-**Cómo se obtuvo (historia, no se repite aquí):**
+* **Postura por clasificador de recortes**: COCO ya encuentra a la persona; v4
+  pasaba cada recorte por un detector completo a 640 px. Ahora todas las
+  personas se clasifican en un solo lote.
+* **Peatones de MOT15 como `persona_erguida`**: en v4 eran una clase `persona`
+  aparte que competía con `persona_erguida`.
+* Variantes `s` probadas y descartadas (postura-s: media 89.4 %, sobreajusta;
+  escalera-s: +2.5 puntos de mAP al doble de coste en CPU).
+* `persona_desequilibrio` (pre-caída) no tiene datos en el dataset: la detecta
+  el esqueleto (§4.7).
 
-1. **Base v3 (`models/base/yolov8s_zoom_v3.pt`)**: YOLOv8s COCO afinado con Fall Detection Dataset, Stairs, MOT15 y Le2i (clase pre-caída), más variantes de primer plano por recorte. Scripts en `training/`.
-2. **Fine-tuning v4**: a partir de la base v3, con fotogramas de los vídeos de escaleras UPAO (`data/Escaleras/Estándar` → train/val/test **por vídeo**, sin fuga; `data/Escaleras/Extra` → solo train), pseudo-etiquetados con el modelo base. Configuración en `training/configs/train_escaleras_v4.yaml`: 100 épocas, 640 px, batch 8, `lr0=3e-4` con coseno, `dropout=0.2`, `mixup=0.15`, `cutmix=0.1`, sin `auto_augment`, *early stopping* de 25 épocas.
-
-**Métricas (de `models/detector/escaleras_s7_v4.metrics.json`):**
-
-| Partición | Precision | Recall | **mAP@0.5** | mAP@0.5:0.95 |
-|---|---|---|---|---|
-| val | 0.665 | 0.786 | **0.776** | 0.635 |
-| test | 0.645 | 0.650 | **0.768** | 0.662 |
-
-| Clase | mAP@0.5 val | mAP@0.5 test |
-|---|---|---|
-| persona_caido | 0.737 | — (no hay ejemplos en test) |
-| persona_sentado | 0.551 | 0.995 |
-| persona_erguida | 0.728 | 0.698 |
-| escalera | 0.989 | 0.995 |
-| persona | 0.873 | 0.383 |
-
-RQNF10 (mAP@0.5 > 75 %) **se cumple** en val y en test. Advertencia honesta:
-el test de los vídeos UPAO es pequeño y no contiene caídas reales, por eso la
-caída se confirma también por **geometría de pose** y nunca solo por el modelo.
+Advertencia honesta: el test de postura es pequeño (41 caído, 18 sentado, 15
+de pie de fotos de stock + 150 peatones) y no incluye la vista en diagonal de
+la escalera real; la caída se sigue confirmando por **geometría de pose** y
+por persistencia temporal, nunca solo por el modelo.
 
 ### 5.2 YOLOv8s COCO — personas y objetos
 
 `models/coco/yolov8s.pt` (Ultralytics, 80 clases COCO). Misma arquitectura que
 5.1. Se usa para **localizar personas** (en escenas reales de escalera el modelo
 propio daba 0.08 de confianza donde COCO daba 0.92) y para detectar **objetos
-sobre los escalones**. Reparto: *COCO decide dónde hay gente; el Modelo S7 v4
+sobre los escalones**. Reparto: *COCO decide dónde hay gente; el Modelo v5
 decide qué postura tiene*.
 
-### 5.3 MediaPipe Pose (BlazePose, variante *lite*)
+### 5.3 YOLOv8-Pose — esqueleto de cada persona (sustituye a MediaPipe Pose)
 
-Detector de persona + regresor de **33 puntos corporales** en modo *tracking*
-(20 ms frente a 41 ms en modo imagen). Corre en CPU (XNNPACK). De los puntos se
-derivan: inclinación del eje tobillo-cadera, altura de la cabeza sobre la
-cadera, posición de muñecas respecto a hombros y cara. Umbrales medidos:
+17 puntos COCO por persona con identidad (ByteTrack). De ellos salen el
+equilibrio (§4.7), el seguro de postura y las señales de conducta
+(`skeleton/signals.py`, distancias en torsos de cada persona):
 
-| Postura | Regla |
+| Señal | Regla |
 |---|---|
-| caído | inclinación > 25° **o** cabeza/eje < 0.55 |
-| pérdida de equilibrio | inclinación > 12° **o** cabeza/eje < 0.75 |
-| erguido | resto |
+| distracción | muñeca junto a la cara con el brazo levantado, o teléfono (COCO) junto a la nariz |
+| sin pasamanos | hay escalera en la escena y ninguna mano se separa del cuerpo a la altura de la cintura/pecho |
+
+**Por qué se retiró MediaPipe Pose del motor:** describe **una sola persona
+por fotograma** y, con varias, emparejaba su pose con la caja equivocada.
+Medido con peatones reales de MOT15: 168 de 192 caídas falsas venían de ahí;
+sin MediaPipe, las caídas falsas bajaron a 25 y los «desequilibrios» falsos
+de 76 a 0. MediaPipe **Face** se sigue usando para anonimizar (§8).
 
 ### 5.4 Real-ESRGAN x4 — mejora de calidad
 
@@ -574,7 +685,7 @@ resultado pareciera una foto real.
 
 | Decisión | Por qué |
 |---|---|
-| **No reentrenar el modelo** | El Modelo S7 v4 ya supera RQNF10 (0.776/0.768) y es el entregable estable. Las mejoras de esta rama son de sistema, no de pesos. |
+| **Modelo v5: detector de escalera + clasificador de postura** | El motor solo usaba el modelo propio para la escalera y para la postura del recorte de cada persona; un clasificador es la herramienta correcta para lo segundo y cuesta una fracción (§5.1). |
 | **Real-ESRGAN `general-x4v3` para el vivo** | Es de la misma familia Real-ESRGAN pero compacto: 22 ms/cuadro frente a ~460 ms de la versión anterior. Permite ver el vídeo mejorado fluido. |
 | **Solo vídeo en vivo** | Pedido del cliente: se quitaron imagen y vídeo subidos y el modelo de SR que solo ellos usaban. |
 | **Audio e imagen como módulos aparte** (`modulos/`) | Pedido: integrar el trabajo de los otros grupos sin interferir en el vídeo. Se cargan aislados y el vídeo no los importa. |
@@ -674,7 +785,7 @@ Resumen. El estado detallado de los 39 requisitos (incluidos RQF09–RQF11 y RQN
 | RQNF02 | Latencia < 500 ms | **Cumple** — respuesta 4–5 ms, motor 27 ms |
 | RQNF03 | GPU ≥ 6 GB | **Supera** — funciona en 4 GB (GTX 1650) con el perfil `baja_vram`; pico medido 0.32 GB |
 | RQNF09 / RQNF26 | Estado operativo real | **Cumple** — `/api/health` |
-| RQNF10 | mAP@0.5 > 75 % | **Cumple** — val 0.776, test 0.768 |
+| RQNF10 | mAP@0.5 > 75 % | **Cumple** — Modelo v5: escalera mAP@0.5 0.802 en test; postura 94.3 % de acierto medio por clase |
 | RQNF12 | Resiliencia a iluminación | **Cumple** — augmentations HSV; SR limpia ruido |
 | RQNF13 | Reconexión automática | **Cumple** — navegador (5 reintentos) y RTSP |
 | RQNF14 | Protección de datos | **Cumple** — §8 |
@@ -754,9 +865,18 @@ Video-G-G/
 
 ```bash
 pip install -r requirements/dev.txt     # pytest
-python -m pytest                        # vídeo + esqueletos + módulos (74 pruebas)
+python -m pytest                        # vídeo + esqueletos + zona + módulos (107 pruebas)
 node --test modulos/audio/tests/audio-worklet.test.cjs   # worklet de audio (5)
 ```
+
+**Pruebas automáticas en GitHub** (`.github/workflows/tests.yml`): en cada
+push a `expo` / `modelo-v5` / `main` y en cada pull request, GitHub instala el
+entorno (CPU), comprueba los paquetes con la lógica del instalador, descarga y
+verifica los modelos y ejecuta todas las pruebas, incluida la de humo con los
+modelos reales. El resultado aparece en el propio PR.
+
+- `tests/test_posture_rules.py`: seguro de postura por reglas del esqueleto y su fusión con el modelo.
+- `tests/test_zone.py`: zona de escalera/pasamanos (validación, geometría, pasamanos real).
 
 - `tests/test_units.py`: configuración, tracker, geometría de pose, persistencia, alertas, **perfil GTX 1650** y **parada ordenada** (sin GPU).
 - `tests/test_skeleton.py`: esqueletos sin GPU (estimador falso): filtro de confianza y oclusión, One Euro, saltos imposibles, ángulo del tronco, nadir, centro de masa con tobillos tapados, persona de pie, bajar deprisa (sin alerta), caída (una alerta), pasamanos tapando piernas, dos personas independientes, un solo criterio no alerta, fusión de la persona partida por el pasamanos.
@@ -775,7 +895,8 @@ rama `semana-7` sobre la misma secuencia: salidas **idénticas** (ver
 | Recurso | Uso | Licencia / origen |
 |---|---|---|
 | [Ultralytics YOLOv8](https://github.com/ultralytics/ultralytics) | Detector y pesos COCO | AGPL-3.0 |
-| [MediaPipe](https://github.com/google-ai-edge/mediapipe) | Pose y detección de rostros | Apache-2.0 |
+| [MediaPipe](https://github.com/google-ai-edge/mediapipe) | Detección de rostros (anonimización) | Apache-2.0 |
+| [OpenVINO](https://github.com/openvinotoolkit/openvino) | Aceleración en procesador (equipos sin GPU) | Apache-2.0 |
 | [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) (X. Wang et al., ICCVW 2021) | Superresolución | BSD-3-Clause |
 | [brigitteve/percepcion](https://github.com/brigitteve/percepcion) | Módulo de audio (detector `final.py` + MLP de caídas) | grupo de audio del curso |
 | [AndreCastAst/Repo-video-imagen-audio @ s7-imagen](https://github.com/AndreCastAst/Repo-video-imagen-audio/tree/s7-imagen) | Módulo de imagen | grupo de imagen del curso |
@@ -795,8 +916,8 @@ Los datasets pertenecen a sus autores y se usan solo con fines académicos.
 ## 15. Limitaciones conocidas
 
 - Las señales de pasamanos y distracción son **reglas sobre keypoints** calibradas con pocas escenas; no hay ground truth público para medirlas.
-- MediaPipe Pose describe **una persona por fotograma**; con varias personas, las señales de pose se asignan a la que mejor encaja.
-- El test del Modelo S7 v4 no contiene caídas reales; la confirmación de caída se apoya en la geometría de pose.
+- Las señales de pasamanos y distracción son reglas sobre los puntos del esqueleto; sin la posición real de la barandilla, «sin pasamanos» es una aproximación (mano separada del cuerpo a la altura de la cintura).
+- El Modelo v5 se evaluó con fotos de stock y peatones de MOT15, no con la escalera real en vista diagonal; la confirmación de caída se apoya en la geometría de pose y en la persistencia temporal.
 - El servidor de Flask es de un solo proceso (adecuado para una cámara). Sin HTTPS no hay cifrado.
 - El perfil de GTX 1650 se validó en una RTX 5070 limitando la memoria a 3.6 GB y forzando FP32; los tiempos reales en una 1650 serán mayores (la vista en vivo sigue a 30 fps porque la detección es asíncrona).
 - El audio se probó con señales sintéticas y el micrófono simulado del navegador; sus umbrales (de `final.py`) no están calibrados en una escalera real y sus índices no son probabilidades clínicas.

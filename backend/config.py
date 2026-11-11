@@ -28,14 +28,18 @@ class ServerCfg:
 
 @dataclass
 class ModelsCfg:
-    detector: str = "models/detector/escaleras_s7_v4.pt"
+    # Modelo v5: detector de escalera (1 clase) + clasificador de postura
+    # sobre el recorte de cada persona (3 clases). Ver training/prepare_v5.py.
+    detector: str = "models/detector/escalera_v5.pt"
+    posture: str = "models/detector/postura_v5.pt"
     coco: str = "models/coco/yolov8s.pt"
     sr_dir: str = "models/sr"
 
 
 @dataclass
 class InferenceCfg:
-    conf: float = 0.25
+    # Sensibilidad: confianza mínima de PERSONA (barra del panel, ver engine.conf)
+    conf: float = 0.20
     imgsz: int = 640
 
 
@@ -46,7 +50,7 @@ class EngineCfg:
     stairs_every: int = 13
     obstacle_every: int = 11
     classify_every: int = 6
-    person_conf: float = 0.20
+    person_conf: float = 0.20    # obsoleto: la controla inference.conf
     person_imgsz: int = 512
     max_stairs_boxes: int = 2
 
@@ -144,6 +148,43 @@ class BalanceCfg:
 
 
 @dataclass
+class PostureRulesCfg:
+    """Seguro de postura por reglas del esqueleto (skeleton/posture_rules.py).
+    Alturas en torsos de la persona (de pie: cabeza 1.4 sobre la cadera,
+    cadera 1.65 sobre los tobillos y 0.8 sobre las rodillas)."""
+    enabled: bool = True
+    # caído
+    hands_feet_torso: float = 0.5   # muñecas a esta altura de los tobillos o menos
+    head_hip_torso: float = 0.35    # cabeza como mucho esto por encima de la cadera
+    lying_ratio: float = 1.3        # ancho / alto de los puntos visibles
+    axis_deg: float = 60.0          # eje hombros->tobillos respecto a la vertical
+    min_points: int = 8             # puntos visibles para medir la extensión
+    # postura incorrecta (sentado / agachado)
+    hip_knee_torso: float = 0.35
+    knee_angle_deg: float = 110.0
+    compact_torso: float = 1.0
+    min_votes: int = 2
+    # de pie con claridad (veta un «caído» del modelo)
+    upright_head_torso: float = 0.9
+    upright_hip_ankle_torso: float = 1.2
+    # persistencia antes de confirmar
+    persist_caido_s: float = 0.6
+    persist_postura_s: float = 1.0
+
+
+@dataclass
+class SkeletonSignalsCfg:
+    """Señales de conducta por esqueleto (skeleton/signals.py), en torsos."""
+    hand_face_torso: float = 0.6       # muñeca así de cerca de la nariz
+    phone_face_torso: float = 1.2      # teléfono (COCO) así de cerca de la nariz
+    rail_lateral_torso: float = 0.5    # mano separada del cuerpo hacia la barandilla
+    rail_above_shoulder_torso: float = 0.2
+    rail_below_hip_torso: float = 0.6
+    # con el pasamanos DIBUJADO en el panel: mano a esta distancia o menos
+    rail_touch_torso: float = 0.45
+
+
+@dataclass
 class SkeletonCfg:
     enabled: bool = True
     model: str = "models/pose/yolov8s-pose.pt"
@@ -159,6 +200,8 @@ class SkeletonCfg:
     smoothing: SkeletonSmoothingCfg = field(default_factory=SkeletonSmoothingCfg)
     perspective: SkeletonPerspectiveCfg = field(default_factory=SkeletonPerspectiveCfg)
     balance: BalanceCfg = field(default_factory=BalanceCfg)
+    postura: PostureRulesCfg = field(default_factory=PostureRulesCfg)
+    senales: SkeletonSignalsCfg = field(default_factory=SkeletonSignalsCfg)
     # rutas absolutas, rellenadas por Settings
     model_path: Any = None
     tracker_path: Any = None
@@ -170,11 +213,25 @@ def _baja_vram_default() -> dict:
             "skeleton.every": 3}
 
 
+def _cpu_default() -> dict:
+    # Sin GPU, el esqueleto YOLOv8s-Pose era el 50 % del coste del motor
+    # (61.6 ms/frame medidos con tools/bench_engine.py --set device=cpu).
+    return {"skeleton.model": "models/pose/yolov8n-pose.pt",
+            "skeleton.imgsz": 480,
+            "skeleton.every": 4,
+            "engine.obstacle_every": 17}
+
+
 @dataclass
 class HardwareCfg:
-    profile: str = "auto"          # auto | normal | baja_vram
+    profile: str = "auto"          # auto | normal | baja_vram | cpu
     low_vram_gb: float = 4.5       # auto: <= esta VRAM -> baja_vram
     baja_vram: dict = field(default_factory=_baja_vram_default)
+    cpu: dict = field(default_factory=_cpu_default)   # auto: sin GPU -> cpu
+    # En CPU, exportar y usar los modelos en OpenVINO (perception/accel.py)
+    openvino_cpu: bool = True
+    # En CPU, el COCO que localiza personas/objetos en INT8 (~2x más rápido)
+    openvino_int8_coco: bool = True
     # Rellenados en el arranque por backend.hardware.apply_profile
     active: str = "normal"
     gpu: dict = field(default_factory=dict)
@@ -219,6 +276,10 @@ class Settings:
     @property
     def detector_path(self) -> Path:
         return self.path(self.models.detector)
+
+    @property
+    def posture_path(self) -> Path:
+        return self.path(self.models.posture)
 
     @property
     def coco_path(self) -> Path:

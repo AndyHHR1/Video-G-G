@@ -5,6 +5,7 @@ on:
     tags:
       - "supuesto-ideal-v*"
       - "esrgan-previo-v*"
+      - "modelo-v*"            # Modelo v5 en adelante (ver job create_modelo_release)
   workflow_dispatch:
 
 permissions:
@@ -51,3 +52,38 @@ jobs:
             backend/enhancement/super_resolution.py
             scripts/setup.sh
             requirements/base.txt
+
+  # Modelo v5 (rama modelo-v5 y siguientes). Las etiquetas antiguas siguen
+  # usando su propio workflow (GitHub toma el de la versión etiquetada), así
+  # que los jobs de arriba no cambian. Ejemplo:
+  #   git tag modelo-v5.0 && git push origin modelo-v5.0
+  create_modelo_release:
+    if: startsWith(github.ref_name, 'modelo-v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Comprobar que los archivos existen
+        run: |
+          for f in models/detector/escalera_v5.pt models/detector/postura_v5.pt \
+                   models/coco/yolov8s.pt instalar.bat instalar.sh; do
+            test -f "$f" || { echo "Falta $f"; exit 1; }
+          done
+
+      - name: Create Modelo Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Modelo v5 - escalera + postura (instalador con doble clic)
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            models/detector/escalera_v5.pt
+            models/detector/escalera_v5.metrics.json
+            models/detector/postura_v5.pt
+            models/detector/postura_v5.metrics.json
+            models/coco/yolov8s.pt
+            instalar.bat
+            instalar.sh

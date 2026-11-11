@@ -5,7 +5,8 @@
     python tools/download_models.py --check    # solo verifica, no descarga
 
 Modelos:
-  * models/detector/escaleras_s7_v4.pt  "Modelo S7 v4" (release del proyecto)
+  * models/detector/escalera_v5.pt      Modelo v5 · escalera (versionado en git)
+  * models/detector/postura_v5.pt       Modelo v5 · postura  (versionado en git)
   * models/coco/yolov8s.pt              YOLOv8s COCO (Ultralytics)
   * models/sr/realesr-general-x4v3.pth  Real-ESRGAN compacto (vídeo en vivo)
   * models/pose/yolov8{s,n}-pose.pt     YOLOv8-Pose (esqueletos y equilibrio)
@@ -13,11 +14,10 @@ Modelos:
   * models/imagen/yolo11n-pose.pt       YOLO11n-Pose (módulo Imagen)
   * modulos/audio/.../fall_classifier.joblib  MLP acústico (módulo Audio)
 
-Ninguno se reentrena: son los modelos entregados o preentrenados públicos.
+Los dos del Modelo v5 se entrenan con training/train_v5.py y vienen
+versionados en el repositorio; el resto son preentrenados públicos.
 
 Solo usa la librería estándar, así que funciona antes de instalar nada.
-El detector viene versionado en el repositorio; si falta, se extrae del
-release v1.2.0-escaleras-v4 de GitHub.
 """
 from __future__ import annotations
 
@@ -30,15 +30,20 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-RELEASE = ("https://github.com/AndyHHR1/Video-G-G/releases/download/"
-           "v1.2.0-escaleras-v4/escaleras_release_v1.2.0.tar.gz")
 
 MODELS = [
+    # Modelo v5: versionado en el repositorio (no tiene URL de descarga).
     {
-        "path": "models/detector/escaleras_s7_v4.pt",
-        "sha256": "b6a04f2f28d1f7bcc6282053db891c387ac0b121f9d2fcca4534c691f606d7ed",
-        "url": RELEASE, "member": "best.pt",
-        "desc": "Modelo S7 v4 (YOLOv8s, 6 clases)",
+        "path": "models/detector/escalera_v5.pt",
+        "sha256": "20349281fa4cbde7e88780266775a42934d7054cc331e1ea5b7e1e6f1cd2fb85",
+        "url": None,
+        "desc": "Modelo v5 · escalera (YOLO11n, 1 clase)",
+    },
+    {
+        "path": "models/detector/postura_v5.pt",
+        "sha256": "783d207b1be291078a53ba98135b5e71baab21ab1595bae185ece30a81c491ee",
+        "url": None,
+        "desc": "Modelo v5 · postura (YOLO11n-cls, 3 clases)",
     },
     {
         "path": "models/coco/yolov8s.pt",
@@ -117,6 +122,10 @@ def ensure(model: dict, check_only: bool) -> bool:
         return ok
     if check_only:
         print(f"  [FALTA] {model['path']}  ({model['desc']})")
+        return False
+    if not model.get("url"):
+        print(f"  [FALTA] {model['path']}  ({model['desc']}): viene versionado "
+              "en el repositorio; recupéralo con git (git checkout -- models/).")
         return False
     print(f"  [..] {model['path']}  ({model['desc']})")
     data = fetch(model["url"])

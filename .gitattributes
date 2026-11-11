@@ -1,0 +1,5 @@
+# Finales de línea correctos para cada sistema, se clone donde se clone
+*.bat  text eol=crlf
+*.ps1  text eol=crlf
+*.sh   text eol=lf
+*.py   text eol=lf

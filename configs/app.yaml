@@ -18,16 +18,23 @@ server:
 device: auto
 
 models:
-  # Modelo definitivo "Modelo S7 v4" (release v1.2.0-escaleras-v4).
-  # No se reentrena: es el entregable final.
-  detector: models/detector/escaleras_s7_v4.pt
+  # Modelo v5 (rama modelo-v5), entrenado con stairs_fallhuman:
+  #   detector -> escalera (YOLO11, 1 clase) sobre el fotograma completo
+  #   posture  -> postura (YOLO11-cls: caído / sentado / erguido) sobre el
+  #               recorte de cada persona que localiza COCO
+  # Ver training/prepare_v5.py y training/train_v5.py.
+  detector: models/detector/escalera_v5.pt
+  posture: models/detector/postura_v5.pt
   # YOLOv8s COCO: localiza personas y objetos sobre la escalera.
   coco: models/coco/yolov8s.pt
   # Pesos de superresolución (Real-ESRGAN), descargados por tools/download_models.py
   sr_dir: models/sr
 
 inference:
-  conf: 0.25          # umbral por defecto del detector (la interfaz lo ajusta)
+  # Sensibilidad = confianza mínima para aceptar que algo es una PERSONA
+  # (detector COCO). Valor inicial de la barra «Sensibilidad» del panel, que
+  # la cambia en vivo. Más bajo = más sensible; más alto = más estricto.
+  conf: 0.20
   imgsz: 640
 
 # Cadencias del motor: cada cuántos fotogramas se ejecuta cada etapa en vídeo
@@ -38,8 +45,12 @@ engine:
   people_every: 6
   stairs_every: 13
   obstacle_every: 11
+  # Igual que people_every A PROPÓSITO: la postura se calcula cuando se
+  # refrescan las cajas de personas y entre medias la caché (por solape) acierta
+  # siempre. Medido con 7 (desalineado): 12.6 ms/frame frente a 7.6 ms.
   classify_every: 6
-  person_conf: 0.20
+  # person_conf ya no se usa: la confianza de persona es inference.conf
+  # (barra «Sensibilidad» del panel).
   person_imgsz: 512
   max_stairs_boxes: 2
 
@@ -138,12 +149,33 @@ skeleton:
     persist_s: 0.25           # sostenido este tiempo -> pérdida de equilibrio
     cooldown_s: 10            # una alerta por persona cada 10 s como máximo
     min_torso_px: 24          # personas más pequeñas no se evalúan (poco fiable)
+  # Seguro de postura por REGLAS de los puntos, independiente del modelo
+  # (backend/perception/skeleton/posture_rules.py). Alturas en torsos de esa
+  # persona; de pie: cabeza 1.4 sobre la cadera, cadera 1.65 sobre los tobillos.
+  postura:
+    enabled: true
+    # caído: >= 3 criterios, o 2 si uno es de cuerpo tendido
+    hands_feet_torso: 0.5     # manos a la altura de los pies
+    head_hip_torso: 0.35      # cabeza a la altura de la cadera
+    lying_ratio: 1.3          # puntos más anchos que altos (cuerpo tendido)
+    axis_deg: 60              # eje hombros->tobillos casi horizontal
+    min_points: 8
+    # postura incorrecta (sentado/agachado): >= min_votes criterios
+    hip_knee_torso: 0.35      # cadera a la altura de las rodillas
+    knee_angle_deg: 110       # AMBAS rodillas dobladas (subir un escalón dobla una)
+    compact_torso: 1.0        # cadera y tobillos juntos en vertical
+    min_votes: 2
+    # claramente de pie: veta una caída que solo ve el recorte del modelo
+    upright_head_torso: 0.9
+    upright_hip_ankle_torso: 1.2
+    persist_caido_s: 0.6      # sostenido este tiempo para confirmar
+    persist_postura_s: 1.0
 
 # Perfil de hardware. Debe funcionar en una GTX 1650 (4 GB, Turing sm_75):
 # la build cu128 de PyTorch ya soporta sm_75; el perfil "baja_vram" solo
 # ajusta lo que en esa tarjeta cuesta demasiado. Ver backend/hardware.py.
 hardware:
-  profile: auto          # auto | normal | baja_vram
+  profile: auto          # auto | normal | baja_vram | cpu (auto: sin GPU -> cpu)
   low_vram_gb: 4.5       # en auto, una GPU con <= 4.5 GB (o GTX 16xx) usa baja_vram
   baja_vram:
     enhancement.half: false            # GTX 16xx: FP16 da NaN/negro en varias redes

@@ -1,0 +1,75 @@
+{
+  "task": "postura",
+  "base": "yolo11n-cls.pt",
+  "weights": "runs/v5/postura_n/weights/best.pt",
+  "hp": {
+    "seed": 42,
+    "deterministic": false,
+    "plots": true,
+    "exist_ok": true,
+    "hsv_h": 0.015,
+    "hsv_s": 0.6,
+    "hsv_v": 0.45,
+    "fliplr": 0.5,
+    "flipud": 0.0,
+    "imgsz": 224,
+    "epochs": 80,
+    "batch": 64,
+    "patience": 20,
+    "auto_augment": "randaugment",
+    "erasing": 0.3,
+    "degrees": 10.0,
+    "translate": 0.1,
+    "scale": 0.3,
+    "dropout": 0.2,
+    "lr0": 0.001,
+    "optimizer": "AdamW",
+    "cos_lr": true,
+    "warmup_epochs": 3
+  },
+  "test": {
+    "top1": 0.9732,
+    "top5": 1.0,
+    "per_class": {
+      "persona_caido": {
+        "recall": 0.9512,
+        "n_test": 41
+      },
+      "persona_erguida": {
+        "recall": 0.9879,
+        "n_test": 165
+      },
+      "persona_sentado": {
+        "recall": 0.8889,
+        "n_test": 18
+      }
+    },
+    "confusion_pred_x_real": [
+      [
+        39,
+        1,
+        2
+      ],
+      [
+        0,
+        163,
+        0
+      ],
+      [
+        2,
+        1,
+        16
+      ]
+    ],
+    "names": {
+      "0": "persona_caido",
+      "1": "persona_erguida",
+      "2": "persona_sentado"
+    }
+  },
+  "latency_ms": {
+    "gpu": 7.17,
+    "cpu": 9.8
+  },
+  "size_mb": 3.19
+}

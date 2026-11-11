@@ -30,7 +30,8 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(s.engine.pose_every, 4)
         self.assertEqual(s.server.port, 8080)
         self.assertIs(s.enhancement.enabled, False)
-        self.assertTrue(str(s.detector_path).endswith("escaleras_s7_v4.pt"))
+        self.assertTrue(str(s.detector_path).endswith("escalera_v5.pt"))
+        self.assertTrue(str(s.posture_path).endswith("postura_v5.pt"))
 
     def test_thresholds_match_requirements(self):
         th = load_settings().thresholds
@@ -119,7 +120,7 @@ class HardwareProfileTest(unittest.TestCase):
         big = {"name": "NVIDIA GeForce RTX 5070 Laptop GPU", "vram_gb": 7.9,
                "capability": "12.0"}
         self.assertEqual(choose_profile("auto", big, 4.5), "normal")
-        self.assertEqual(choose_profile("auto", {}, 4.5), "normal")      # CPU
+        self.assertEqual(choose_profile("auto", {}, 4.5), "cpu")         # sin GPU
         self.assertEqual(choose_profile("baja_vram", big, 4.5), "baja_vram")
 
     def test_apply_profile_disables_fp16_and_shrinks_live_sr(self):
@@ -133,6 +134,203 @@ class HardwareProfileTest(unittest.TestCase):
         self.assertEqual(s.enhancement.live.input_max, 320)
         self.assertEqual(s.inference.imgsz, 640)     # la detección no cambia
         self.assertIn("enhancement.half", changes)
+
+    def test_cpu_profile_lightens_skeleton_and_resolves_path(self):
+        from backend.hardware import apply_profile
+        s = load_settings()
+        name, changes = apply_profile(s, {})          # sin GPU
+        self.assertEqual(name, "cpu")
+        self.assertTrue(str(s.skeleton.model_path).endswith("yolov8n-pose.pt"))
+        self.assertGreaterEqual(s.skeleton.every, 4)
+        self.assertIn("skeleton.model", changes)
+        # GPU presente pero device=cpu forzado: también perfil cpu
+        s2 = load_settings(overrides=["device=cpu"])
+        big = {"name": "NVIDIA GeForce RTX 5070", "vram_gb": 7.9,
+               "capability": "12.0", "arch_ok": True}
+        self.assertEqual(apply_profile(s2, big)[0], "cpu")
+
+
+class EngineCadenceTest(unittest.TestCase):
+    """Una etapa sin resultados (escena sin escalera / sin personas) debe
+    respetar su cadencia: antes corría en TODOS los fotogramas."""
+
+    def test_empty_stage_respects_cadence(self):
+        from backend.perception.engine import RiskEngine
+
+        calls = {"stairs": 0, "people": 0}
+
+        class FakePosture:
+            names = {3: "escalera"}
+            id_of = {"escalera": 3}
+
+            def stairs(self, frame, max_boxes=2):
+                calls["stairs"] += 1
+                return []                              # nunca hay escalera
+
+            def classify_many(self, frame, boxes):
+                return [("", 0.0)] * len(boxes)
+
+        class FakeCoco:
+            def people(self, frame):
+                calls["people"] += 1
+                return []                              # nunca hay personas
+
+            def obstacles(self, frame):
+                return []
+
+        s = load_settings()
+        eng = RiskEngine.__new__(RiskEngine)
+        eng.__dict__.update(
+            settings=s, device="cpu", conf=0.25, th=s.thresholds,
+            pose_every=10 ** 6, people_every=6, stairs_every=13,
+            obstacle_every=10 ** 6, classify_every=6, max_stairs_boxes=2,
+            posture=FakePosture(), coco=FakeCoco(), skeleton=None,
+            skeleton_every=1, _frame_no=0, _last_people=None,
+            _last_stairs=None, _last_obstacles=[], _next_due={},
+            _last_class=None, _last_skeletons=None, signals_cfg=s.skeleton.senales,
+            zone=__import__("backend.perception.zone", fromlist=["Zone"]).Zone(),
+            _fall_held={}, _errors={"gpu": 0, "pose": 0, "deteccion": 0},
+            _error_prints={}, camera_connected=True)
+        from backend.perception.tracking import IoUTracker
+        from unittest import mock
+        eng.tracker = IoUTracker()
+        eng.alerts = mock.MagicMock()
+        eng.alerts.update.return_value = []
+        frame = np.zeros((54, 96, 3), np.uint8)
+        for _ in range(26):
+            try:
+                eng.step(frame, allow_alerts=False)
+            except Exception:                          # noqa: BLE001
+                pass    # el resto del pipeline usa piezas falsas; solo se cuentan llamadas
+        # 26 fotogramas: escalera al principio + cada 13
+        self.assertGreaterEqual(calls["stairs"], 2)    # la etapa sí se alcanza
+        self.assertLessEqual(calls["stairs"], 3)
+        # personas: al principio + cada 6
+        self.assertLessEqual(calls["people"], 5)
+
+
+class SchedulerTest(unittest.TestCase):
+    """Como mucho UNA etapa pesada por fotograma y cadencias respetadas."""
+
+    def _engine(self, **periods):
+        from backend.perception.engine import RiskEngine
+        eng = RiskEngine.__new__(RiskEngine)
+        eng.__dict__.update(people_every=6, skeleton_every=2, stairs_every=13,
+                            obstacle_every=11, skeleton=object(), _next_due={})
+        eng.__dict__.update(periods)
+        return eng
+
+    def test_one_heavy_stage_per_frame(self):
+        eng = self._engine()
+        runs = {k: 0 for k in eng.STAGES}
+        for n in range(1, 601):                         # 20 s a 30 fps
+            got = eng._schedule(n)
+            self.assertLessEqual(len(got), 1)
+            for k in got:
+                runs[k] += 1
+        # cada etapa corre aproximadamente a su cadencia (algún aplazamiento)
+        self.assertGreaterEqual(runs["people"], 600 // 6 - 5)
+        self.assertGreaterEqual(runs["skeleton"], 600 // 2 * 0.8)
+        self.assertGreaterEqual(runs["stairs"], 600 // 13 - 5)
+        self.assertGreaterEqual(runs["obstacles"], 600 // 11 - 5)
+
+    def test_force_runs_everything(self):
+        eng = self._engine()
+        self.assertEqual(eng._schedule(1, force=True), set(eng.STAGES))
+
+    def test_no_skeleton_stage_when_disabled(self):
+        eng = self._engine(skeleton=None)
+        seen = set()
+        for n in range(1, 50):
+            seen |= eng._schedule(n)
+        self.assertNotIn("skeleton", seen)
+
+
+class SkeletonSignalsTest(unittest.TestCase):
+    """Pasamanos y distracción con los puntos de cada persona (sin MediaPipe)."""
+
+    @staticmethod
+    def sk(wrists, elbows=None, torso=100.0):
+        # persona de pie en píxeles: hombros y=200, caderas y=300 (torso 100)
+        k = [[0.0, 0.0, 0.9, 0] for _ in range(17)]
+        pts = {0: (500, 150), 5: (460, 200), 6: (540, 200), 11: (470, 300),
+               12: (530, 300)}
+        el = elbows or ((455, 260), (545, 260))
+        pts.update({7: el[0], 8: el[1], 9: wrists[0], 10: wrists[1]})
+        for i, (x, y) in pts.items():
+            k[i] = [x, y, 0.9, 1]
+        return {"id": 3, "kps": k, "metricas": {"torso_px": torso}}
+
+    def setUp(self):
+        from backend.config import SkeletonSignalsCfg
+        from backend.perception.skeleton.signals import skeleton_signals
+        self.cfg, self.f = SkeletonSignalsCfg(), skeleton_signals
+
+    def tipos(self, sk, **kw):
+        return {s["tipo"] for s in self.f(sk, self.cfg, **kw)}
+
+    def test_hands_down_on_stairs_is_no_handrail(self):
+        sk = self.sk(((460, 320), (540, 320)))          # brazos colgando
+        self.assertIn("sin_pasamanos", self.tipos(sk, stairs_present=True))
+        self.assertNotIn("sin_pasamanos", self.tipos(sk, stairs_present=False))
+
+    def test_hand_out_at_waist_holds_handrail(self):
+        sk = self.sk(((380, 290), (540, 320)))          # mano izq. a la barandilla
+        self.assertNotIn("sin_pasamanos", self.tipos(sk, stairs_present=True))
+
+    def test_hand_at_face_is_distraction(self):
+        sk = self.sk(((505, 165), (540, 320)), elbows=((470, 230), (545, 260)))
+        self.assertIn("distraccion", self.tipos(sk))
+
+    def test_phone_near_face_is_distraction(self):
+        sk = self.sk(((460, 320), (540, 320)))
+        phone = {"bbox": [490, 150, 520, 190], "conf": 0.5}
+        sigs = self.f(sk, self.cfg, phones=[phone])
+        self.assertEqual([s["tipo"] for s in sigs], ["distraccion"])
+        self.assertIn("teléfono", sigs[0]["detalle"])
+
+    def test_hidden_wrists_do_not_signal_handrail(self):
+        sk = self.sk(((460, 320), (540, 320)))
+        sk["kps"][9][3] = sk["kps"][10][3] = 0          # muñecas tapadas
+        self.assertNotIn("sin_pasamanos", self.tipos(sk, stairs_present=True))
+
+
+class SensitivityTest(unittest.TestCase):
+    """La barra «Sensibilidad» (engine.conf) llega al detector de personas."""
+
+    def test_conf_updates_person_threshold_and_clamps(self):
+        from types import SimpleNamespace
+        from backend.perception.engine import RiskEngine
+        eng = RiskEngine.__new__(RiskEngine)
+        eng.coco = SimpleNamespace(person_conf=0.20)
+        eng.conf = 0.35
+        self.assertEqual(eng.coco.person_conf, 0.35)
+        self.assertEqual(eng.conf, 0.35)
+        eng.conf = 5            # fuera de rango -> se limita
+        self.assertEqual(eng.coco.person_conf, 0.95)
+        eng.conf = -1
+        self.assertEqual(eng.coco.person_conf, 0.05)
+
+    def test_default_sensitivity_matches_panel(self):
+        self.assertEqual(load_settings().inference.conf, 0.20)
+
+
+class ObstacleRiskTest(unittest.TestCase):
+    """Un objeto en la escalera es riesgo MEDIO (naranja), nunca ALTO (rojo)."""
+
+    def test_obstacles_are_medium_risk(self):
+        from backend.perception.catalog import RISK_CATALOG, RISK_COLOR
+        from backend.rendering.draw import _obstacle_style, summarise
+        self.assertEqual(RISK_CATALOG["obstaculo_escalon"]["riesgo"], "MEDIO")
+        mochila = {"tipo": "obstaculo_escalon", "objeto": "backpack",
+                   "riesgo": "MEDIO", "conf": 0.9, "bbox": [0, 0, 10, 10]}
+        color, prefix, es_riesgo = _obstacle_style(mochila)
+        self.assertEqual(color, RISK_COLOR["MEDIO"])
+        self.assertTrue(es_riesgo)
+        # varios objetos siguen siendo MEDIO
+        dets = [{"risk": "MEDIO", "tipo": "obstaculo_escalon"}] * 4 + \
+               [{"risk": "BAJO", "class_name": "persona_erguida"}]
+        self.assertEqual(summarise(dets)["level"], "MEDIO")
 
 
 class LifecycleTest(unittest.TestCase):

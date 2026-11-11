@@ -48,6 +48,54 @@
      height:auto preserva la proporción: el canvas de 640 px se estira a 100%
      del contenedor y las cajas vectoriales se escalan nítidas */
   .stage canvas.live { max-width:100%; height:auto; }
+  .stage canvas.zone-ov { position:absolute; pointer-events:none; max-height:none; border-radius:4px; }
+  .stage canvas.zone-ov.editing { pointer-events:auto; cursor:crosshair; }
+  /* Controles de la cámara: acciones arriba; debajo, tres grupos con título
+     (detección · vídeo · vista y avisos) separados por una línea fina. */
+  .camctl { margin-bottom:14px; }
+  .camctl-actions { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:12px; }
+  .camctl-setup { margin-left:auto; }
+  .camctl-groups { display:grid; grid-template-columns:minmax(260px,1.5fr) minmax(190px,1fr) minmax(210px,1fr);
+                   border-top:1px solid var(--line); padding-top:12px; }
+  .cg { border:0; margin:0; padding:0 16px; min-width:0; display:flex; flex-direction:column; gap:8px; }
+  .cg:first-child { padding-left:0; }
+  .cg:last-child { padding-right:0; }
+  .cg + .cg { border-left:1px solid var(--line); }
+  .cg legend { float:left; width:100%; padding:0; margin-bottom:2px; font-size:12px; font-weight:600;
+               text-transform:uppercase; letter-spacing:.06em; color:var(--muted); }
+  .cg-slider { display:flex; align-items:center; gap:10px; color:var(--text); }
+  .cg-slider input[type=range] { flex:1; min-width:110px; width:auto; }
+  .cg-slider b { font-variant-numeric:tabular-nums; min-width:2.6em; text-align:right; }
+  .cg-field { display:flex; flex-direction:column; align-items:flex-start; gap:4px; }
+  .cg-field select { width:100%; max-width:240px; }
+  .cg-check { display:flex; align-items:center; gap:8px; cursor:pointer; line-height:1.35; }
+  .cg-check input { margin:0; flex:none; accent-color:var(--accent); }
+  .camctl input[type=range] { accent-color:var(--accent); }
+  .camctl :focus-visible { outline:2px solid var(--accent); outline-offset:2px; border-radius:4px; }
+  @media (max-width: 1100px) {
+    .camctl-groups { grid-template-columns:1fr 1fr; row-gap:14px; }
+    .cg-sens { grid-column:1 / -1; padding-right:0; }
+    .cg-sens + .cg { border-left:0; padding-left:0; }
+  }
+  @media (max-width: 600px) {
+    .camctl-groups { grid-template-columns:1fr; }
+    .cg, .cg + .cg { border-left:0; padding:0; }
+    .camctl-setup { margin-left:0; }
+  }
+  .sens-hint { font-size:12px; color:var(--muted); line-height:1.5; max-width:62ch; }
+  .sens-hint b { color:var(--text); font-weight:600; }
+  .sens-hint .cost { color:#f2a83c; }
+  /* la tarjeta de riesgo de la cámara solo ocupa sitio cuando tiene datos */
+  #camrisk:empty { display:none; }
+  /* Contraste AA en la pestaña de cámara (sin tocar el color general, que
+     comparten las pestañas de audio e imagen): botón principal con texto
+     blanco a 5.2:1 (antes 3.2:1) y el aviso del área de vídeo legible
+     (antes 1.9:1). */
+  .camctl-actions button:not(.ghost):not(:disabled), #zSave { background:#2563eb; }
+  .camctl-actions button:not(.ghost):not(:disabled):hover, #zSave:hover { background:#1d4ed8; }
+  #scam .placeholder { color:var(--muted); }
+  .zonebar { background:#141821; border:1px solid var(--line); border-radius:8px; padding:8px 12px; }
+  .zonebar b { color:#c878c8; font-size:13px; }
   .placeholder { color:#39404f; font-size:13px; padding:60px 20px; text-align:center; }
   .risk { border-radius:8px; padding:14px; margin-bottom:12px; border:1px solid; }
   /* Panel lateral de alertas (RQF08) */
@@ -116,6 +164,24 @@
              align-items:center; justify-content:center; flex-direction:column; gap:12px;
              text-align:center; padding:24px; }
   #stopped h2 { font-size:18px; color:var(--text); text-transform:none; letter-spacing:0; }
+  /* Confirmación antes de apagar (sustituye al confirm() del navegador) */
+  #sysConfirm { display:none; position:fixed; inset:0; z-index:10002; background:rgba(10,12,16,.72);
+                align-items:center; justify-content:center; padding:24px; }
+  #sysConfirm.on { display:flex; }
+  #sysConfirm .box { background:var(--panel); border:1px solid #5c2b2b; border-radius:12px;
+                     max-width:440px; width:100%; padding:22px 22px 18px;
+                     box-shadow:0 18px 48px rgba(0,0,0,.45); }
+  #sysConfirm h2 { font-size:17px; color:var(--text); text-transform:none; letter-spacing:0;
+                   margin-bottom:10px; }
+  #sysConfirm p { font-size:13.5px; color:var(--muted); line-height:1.55; margin:0 0 8px; }
+  #sysConfirm p b { color:var(--text); font-weight:600; }
+  #sysConfirm .acts { display:flex; justify-content:flex-end; gap:10px; margin-top:18px; }
+  #sysConfirm .danger { background:#b42323; }
+  #sysConfirm .danger:hover { background:#951b1b; }
+  #sysConfirm button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  /* Easter egg: el kitsune camina por los bordes al apagar el sistema */
+  #kitsune { position:fixed; left:0; top:0; z-index:10003; pointer-events:none; display:none;
+             image-rendering:pixelated; background-repeat:no-repeat; will-change:transform; }
   @media (max-width: 900px) { .grid { grid-template-columns:1fr; } }
 </style>
 {% if modules.get('audio') %}<link rel="stylesheet" href="/modulos/audio/static/audio-panel.css">{% endif %}
@@ -125,7 +191,7 @@
   <div class="top">
     <div>
       <h1>Prevención de Caídas y Riesgos en Escaleras</h1>
-      <div class="sub" style="margin-bottom:4px">Vídeo en vivo · YOLOv8 · 6 clases · <span id="dev">—</span></div>
+      <div class="sub" style="margin-bottom:4px">Vídeo en vivo · Modelo v5 (escalera + postura) · <span id="dev">—</span></div>
       <div class="mods" id="mods"></div>
     </div>
     <button id="bsys" class="btn-stop" title="Detiene todo el sistema: cámara, audio, imagen, modelos y servidor">⏻ Detener sistema</button>
@@ -142,24 +208,59 @@
   <div class="panel on" id="p-cam">
     <div class="grid">
       <div>
-        <div class="ctrl">
-          <button id="bcam">Conectar webcam</button>
-          <button id="bstop" class="ghost" disabled>Detener</button>
-          <label>Umbral <input type="range" id="ccam" min="0.05" max="0.90" step="0.05" value="0.25">
-            <b id="cvcam">0.25</b></label>
-          <label>Enviar cada
-            <select id="rate" class="sel">
-              <option value="100">10 fps</option>
-              <option value="66">15 fps</option>
-              <option value="50">20 fps</option>
-              <option value="40">25 fps</option>
-              <option value="33" selected>30 fps (recomendado)</option>
-            </select>
-          </label>
-          <label title="Mejora de calidad Real-ESRGAN x4 (realesr-general-x4v3) en tiempo real: ~22 ms por cuadro en GPU, el video se mantiene fluido (~30 fps). La detección siempre usa el cuadro original.">
-            <input type="checkbox" id="fast"> Mejora de calidad (Real-ESRGAN x4)
-          </label>
-         </div>
+        <div class="camctl">
+          <div class="camctl-actions">
+            <button id="bcam">Conectar webcam</button>
+            <button id="bstop" class="ghost" disabled>Detener</button>
+            <button class="ghost camctl-setup" id="bzone" title="Marca sobre la imagen dónde está la escalera y el pasamanos. Las personas fuera de la escalera no generan alertas, solo cuentan los objetos dentro de ella y el pasamanos se comprueba con la línea real.">Configurar zona</button>
+          </div>
+          <div class="camctl-groups">
+            <fieldset class="cg cg-sens">
+              <legend>Detección</legend>
+              <label class="cg-slider" title="Confianza mínima para aceptar que algo es una persona. Más a la izquierda = más sensible; más a la derecha = más estricto.">
+                <span>Sensibilidad</span>
+                <input type="range" id="ccam" min="0.05" max="0.60" step="0.05" value="0.20">
+                <b id="cvcam">0.20</b>
+              </label>
+              <div class="sens-hint" id="sensHint" aria-live="polite"></div>
+            </fieldset>
+            <fieldset class="cg">
+              <legend>Vídeo</legend>
+              <label class="cg-field">Enviar cada
+                <select id="rate" class="sel">
+                  <option value="100">10 fps</option>
+                  <option value="66">15 fps</option>
+                  <option value="50">20 fps</option>
+                  <option value="40">25 fps</option>
+                  <option value="33" selected>30 fps (recomendado)</option>
+                </select>
+              </label>
+              <label class="cg-check" title="Mejora de calidad Real-ESRGAN x4 (realesr-general-x4v3) en tiempo real: ~22 ms por cuadro en GPU, el video se mantiene fluido (~30 fps). La detección siempre usa el cuadro original.">
+                <input type="checkbox" id="fast"> Mejora de calidad (Real-ESRGAN x4)
+              </label>
+            </fieldset>
+            <fieldset class="cg">
+              <legend>Vista y avisos</legend>
+              <label class="cg-check" title="Por defecto los cuadros y esqueletos son intermitentes: aparecen unos segundos cuando entra alguien o cambia la escena, y brevemente cada 8 s. Los riesgos (naranja/rojo) se ven siempre. Marca esta casilla para verlos todo el tiempo.">
+                <input type="checkbox" id="overlayAlways"> Mostrar siempre cuadros y esqueletos
+              </label>
+              <label class="cg-check" title="Pitido cuando aparece una alerta nueva de vídeo: tres pitidos agudos si es crítica (roja), uno grave si es de precaución (naranja).">
+                <input type="checkbox" id="alertSound" checked> Sonido de alertas
+              </label>
+            </fieldset>
+          </div>
+        </div>
+        <div class="ctrl zonebar" id="zoneBar" style="display:none">
+          <b>Zona:</b>
+          <label><input type="radio" name="ztool" value="escalera" checked> Escalera (contorno)</label>
+          <label><input type="radio" name="ztool" value="pasamanos"> Pasamanos (línea)</label>
+          <button class="ghost" id="zFinish">Terminar trazo</button>
+          <button class="ghost" id="zUndo">Deshacer</button>
+          <button class="ghost" id="zClear">Borrar todo</button>
+          <button id="zSave">Guardar zona</button>
+          <button class="ghost" id="zCancel">Cancelar</button>
+          <span class="req" id="zHint"></span>
+        </div>
         <div class="stage" id="scam">
           <div class="placeholder">Pulsa «Conectar webcam» para usar la cámara de este equipo</div>
         </div>
@@ -235,6 +336,24 @@
   <div class="req" id="stopped-m">Se están cerrando la cámara, el audio, la imagen, los modelos y el servidor.</div>
 </div>
 
+<div id="sysConfirm" role="alertdialog" aria-modal="true" aria-labelledby="sysConfirm-t" aria-describedby="sysConfirm-d">
+  <div class="box">
+    <h2 id="sysConfirm-t">¿Seguro que quieres apagar el sistema?</h2>
+    <div id="sysConfirm-d">
+      <p>Esto <b>apagará todo</b>: se cerrarán la cámara, el audio y la imagen, se
+         liberarán los modelos y se detendrá el servidor. <b>Mientras esté apagado
+         no se vigilará la escalera.</b></p>
+      <p>Para volver a usarlo, abre otra vez <b>«Sistema Escaleras»</b> desde el Escritorio.</p>
+    </div>
+    <div class="acts">
+      <button class="ghost" id="sysConfirm-no">Cancelar</button>
+      <button class="danger" id="sysConfirm-yes">Sí, apagar</button>
+    </div>
+  </div>
+</div>
+
+<div id="kitsune" aria-hidden="true"></div>
+
 {% if modules.get('audio') %}
 <script src="/modulos/audio/static/audio-live.js"></script>
 <script src="/modulos/audio/static/audio-panel.js"></script>
@@ -267,7 +386,32 @@ if (_camAudioLink) _camAudioLink.onclick = e => {
 };
 
 // deslizador
-$('#ccam').oninput = e => $('#cvcam').textContent = (+e.target.value).toFixed(2);
+// Barra «Sensibilidad»: confianza mínima para aceptar que algo es una
+// persona (detector COCO del servidor). Se explica en vivo qué hace cada
+// rango y qué se sacrifica.
+function sensText(v) {
+  if (v <= 0.10) return ['Muy sensible',
+    'detecta personas lejanas, pequeñas o tapadas por el pasamanos.',
+    'más detecciones falsas (sombras, abrigos colgados, objetos) y algo más de trabajo para el equipo.'];
+  if (v <= 0.25) return ['Equilibrado (recomendado)',
+    'buen balance entre no perder personas y no inventarlas.',
+    'alguna persona muy lejana o muy tapada puede no detectarse.'];
+  if (v <= 0.40) return ['Estricto',
+    'solo acepta personas con bastante claridad: menos detecciones falsas.',
+    'puede no ver a personas lejanas, de espaldas o tapadas por el pasamanos, y por tanto no analizar su postura.'];
+  return ['Muy estricto',
+    'solo personas claras y cercanas a la cámara.',
+    'puede perder caídas de personas lejanas o tapadas: no recomendado para vigilancia.'];
+}
+function updateSens() {
+  const v = +$('#ccam').value;
+  $('#cvcam').textContent = v.toFixed(2);
+  const [name, does, cost] = sensText(v);
+  $('#sensHint').innerHTML = `<b>Sensibilidad ${v.toFixed(2)} · ${name}:</b> ${does} ` +
+    `<span class="cost">Se sacrifica: ${cost}</span>`;
+}
+$('#ccam').oninput = updateSens;
+updateSens();
 
 // salud y estado de los módulos
 fetch('/api/health').then(r=>r.json()).then(d => {
@@ -310,7 +454,7 @@ function riskPanels(d) {
   h += obs.length
     ? '<table>' + obs.map(o=>`<tr><td>${o.objeto}</td>
         <td class="req">${o.tipo === 'telefono' ? 'RQF02 (3) móvil'
-            : o.riesgo === 'ALTO' ? 'obstáculo' : 'escena'}</td></tr>`).join('') + '</table>'
+            : o.tipo === 'obstaculo_escalon' ? 'obstáculo (riesgo medio)' : 'escena'}</td></tr>`).join('') + '</table>'
     : '<div class="req">Ningún objeto detectado sobre el escalón.</div>';
   h += '</div>';
   // RQF02 (2)(3) postura
@@ -393,6 +537,151 @@ function hexToB64(hex) {
 // las cajas en coordenadas normalizadas (0..1), asi que se escalan al canvas.
 const RISK_COLOR = {ALTO:'#e03c3c', MEDIO:'#f2a83c', BAJO:'#3fb85a',
                     NEUTRO:'#dcdcdc', CONTEXTO:'#c878c8'};
+
+// ---------- cuadros y esqueletos intermitentes ----------
+// Por defecto el vídeo queda limpio: cuadros y esqueletos aparecen solo un
+// rato cuando pasa algo y luego se desvanecen. Los riesgos (MEDIO/ALTO) se ven
+// SIEMPRE, pero solo ellos. La casilla #overlayAlways los fija todo el tiempo.
+const OVERLAY_SHOW_MS = 3000;    // visibles tras un evento (persona nueva)
+const OVERLAY_PULSE_EVERY = 8000; // recordatorio periódico: el sistema vigila
+const OVERLAY_PULSE_MS = 1500;
+const OVERLAY_FADE_MS = 400;     // desvanecido al final
+const OVERLAY_ID_MEMORY = 5000;  // una identidad no vista en 5 s cuenta como nueva
+const overlay = { always: false, until: 0, lastPulse: 0, seen: new Map() };
+try { overlay.always = localStorage.getItem('overlayAlways') === '1'; } catch (_) {}
+
+function isRisky(r) { return r === 'ALTO' || r === 'MEDIO'; }
+
+// Opacidad (0..1) de los elementos SIN riesgo en este fotograma.
+function overlayAlpha(d) {
+  if (overlay.always) return 1;
+  const now = performance.now();
+  let fresh = false;
+  for (const b of d.detections || []) {
+    if (b.track_id == null) continue;
+    const last = overlay.seen.get(b.track_id);
+    if (last == null || now - last > OVERLAY_ID_MEMORY) fresh = true;   // entra alguien
+    overlay.seen.set(b.track_id, now);
+  }
+  for (const [id, t] of overlay.seen) if (now - t > 4 * OVERLAY_ID_MEMORY) overlay.seen.delete(id);
+  if (fresh) overlay.until = Math.max(overlay.until, now + OVERLAY_SHOW_MS);
+  if (now - overlay.lastPulse > OVERLAY_PULSE_EVERY) {
+    overlay.lastPulse = now;
+    overlay.until = Math.max(overlay.until, now + OVERLAY_PULSE_MS);
+  }
+  const left = overlay.until - now;
+  return left <= 0 ? 0 : Math.min(1, left / OVERLAY_FADE_MS);
+}
+
+// ---------- zona de escalera y pasamanos (dibujada por el usuario) ----------
+// Se guarda en el servidor (/api/zona, coordenadas 0..1). Con ella, las
+// personas fuera de la escalera no generan alertas, solo cuentan los objetos
+// dentro y el pasamanos se comprueba con la línea real.
+const zone = { data: {escalera: [], pasamanos: []}, edit: false, draft: null,
+               cur: [], canvas: null };
+(async () => { try { zone.data = await (await fetch('/api/zona')).json(); } catch (_) {} })();
+
+function zoneDisp() { return document.querySelector('#scam canvas.live'); }
+function zoneOverlay() {
+  if (!zone.canvas) {
+    zone.canvas = document.createElement('canvas');
+    zone.canvas.className = 'zone-ov';
+    zone.canvas.addEventListener('click', zoneClick);
+    zone.canvas.addEventListener('dblclick', (e) => { e.preventDefault(); zoneFinish(); });
+  }
+  const sc = $('#scam');
+  if (zone.canvas.parentNode !== sc) sc.appendChild(zone.canvas);   // #scam se rehace al conectar
+  return zone.canvas;
+}
+function renderZone() {
+  const disp = zoneDisp();
+  const show = zone.edit || overlay.always;
+  if (!disp || !show) { if (zone.canvas) zone.canvas.style.display = 'none'; return; }
+  const c = zoneOverlay(), r = disp.getBoundingClientRect(), p = $('#scam').getBoundingClientRect();
+  Object.assign(c.style, {display: 'block', left: (r.left - p.left) + 'px', top: (r.top - p.top) + 'px',
+                          width: r.width + 'px', height: r.height + 'px'});
+  if (c.width !== Math.round(r.width) || c.height !== Math.round(r.height)) {
+    c.width = Math.round(r.width); c.height = Math.round(r.height);
+  }
+  c.classList.toggle('editing', zone.edit);
+  const g = c.getContext('2d'), W = c.width, H = c.height, z = zone.edit ? zone.draft : zone.data;
+  g.clearRect(0, 0, W, H);
+  const path = (pts) => { g.beginPath(); pts.forEach(([x, y], i) => i ? g.lineTo(x * W, y * H) : g.moveTo(x * W, y * H)); };
+  if (z.escalera && z.escalera.length >= 3) {
+    path(z.escalera); g.closePath();
+    g.fillStyle = 'rgba(200,120,200,0.16)'; g.fill();
+    g.strokeStyle = '#c878c8'; g.lineWidth = 2; g.stroke();
+  }
+  g.strokeStyle = '#ffd24a'; g.lineWidth = 3;
+  for (const line of z.pasamanos || []) { path(line); g.stroke(); }
+  if (zone.edit && zone.cur.length) {                 // trazo en curso
+    const tool = document.querySelector('input[name=ztool]:checked').value;
+    g.setLineDash([6, 4]);
+    g.strokeStyle = tool === 'escalera' ? '#c878c8' : '#ffd24a';
+    path(zone.cur); g.stroke(); g.setLineDash([]);
+    g.fillStyle = '#fff';
+    for (const [x, y] of zone.cur) { g.beginPath(); g.arc(x * W, y * H, 4, 0, 2 * Math.PI); g.fill(); }
+  }
+  if (zone.edit) requestAnimationFrame(renderZone);
+}
+function zoneHint(t) { $('#zHint').textContent = t; }
+function zoneClick(e) {
+  const r = zone.canvas.getBoundingClientRect();
+  const x = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+  const y = Math.min(1, Math.max(0, (e.clientY - r.top) / r.height));
+  zone.cur.push([+x.toFixed(4), +y.toFixed(4)]);
+  zoneHint(`${zone.cur.length} punto(s). Doble clic o «Terminar trazo» para cerrarlo.`);
+}
+function zoneFinish() {
+  const tool = document.querySelector('input[name=ztool]:checked').value;
+  if (tool === 'escalera') {
+    if (zone.cur.length < 3) return zoneHint('La escalera necesita al menos 3 puntos.');
+    zone.draft.escalera = zone.cur;
+  } else {
+    if (zone.cur.length < 2) return zoneHint('El pasamanos necesita al menos 2 puntos.');
+    zone.draft.pasamanos = [...(zone.draft.pasamanos || []), zone.cur];
+  }
+  zone.cur = [];
+  zoneHint('Trazo guardado en el borrador. Pulsa «Guardar zona» para aplicarlo.');
+}
+function zoneEnd() {
+  zone.edit = false; zone.cur = [];
+  $('#zoneBar').style.display = 'none';
+  renderZone();
+}
+$('#bzone').onclick = () => {
+  if (!zoneDisp()) {
+    alert('Conecta primero la cámara: la zona se dibuja sobre su imagen.');
+    return;
+  }
+  zone.draft = JSON.parse(JSON.stringify(zone.data || {escalera: [], pasamanos: []}));
+  zone.cur = []; zone.edit = true;
+  $('#zoneBar').style.display = 'flex';
+  zoneHint('Elige «Escalera» o «Pasamanos» y haz clic sobre la imagen para marcar puntos.');
+  renderZone();
+};
+$('#zFinish').onclick = zoneFinish;
+$('#zUndo').onclick = () => {
+  const tool = document.querySelector('input[name=ztool]:checked').value;
+  if (zone.cur.length) zone.cur.pop();
+  else if (tool === 'escalera') zone.draft.escalera = [];
+  else (zone.draft.pasamanos || []).pop();
+};
+$('#zClear').onclick = () => { zone.draft = {escalera: [], pasamanos: []}; zone.cur = []; };
+$('#zCancel').onclick = zoneEnd;
+$('#zSave').onclick = async () => {
+  if (zone.cur.length) zoneFinish();
+  try {
+    const r = await fetch('/api/zona', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                        body: JSON.stringify(zone.draft)});
+    const d = await r.json();
+    if (!r.ok) return zoneHint(d.error || 'No se pudo guardar la zona.');
+    zone.data = {escalera: d.escalera, pasamanos: d.pasamanos};
+    zoneEnd();
+  } catch (e) { zoneHint('No se pudo guardar: ' + e); }
+};
+window.addEventListener('resize', renderZone);
+
 function drawBoxes(src, dst, d) {
   // `src` es el frame super-resuelto (SR 4×) devuelto por el servidor como
   // `image`, o, si no se devolvió, el canvas nativo capturado en el navegador.
@@ -414,8 +703,10 @@ function drawBoxes(src, dst, d) {
    c.filter = 'brightness(1.08) contrast(1.10) saturate(1.05)';
    c.drawImage(src, 0, 0, dst.width, dst.height);
    c.filter = 'none';
+  const alpha = overlayAlpha(d);
   for (const b of d.detections) {
     // las señales de postura no tienen caja: no se dibuja rectángulo
+    // (son avisos de riesgo en texto: se ven siempre)
     if (!b.bbox) {
       const col = RISK_COLOR[b.risk] || '#dcdcdc';
       c.font = 'bold 13px system-ui,sans-serif';
@@ -424,21 +715,22 @@ function drawBoxes(src, dst, d) {
                   10, 54 + 16 * (d._sp = (d._sp||0) + 1) - 16);
       continue;
     }
+    // intermitente: lo que no es riesgo solo se ve mientras alpha > 0
+    const a = isRisky(b.risk) ? 1 : alpha;
+    if (a <= 0) continue;
+    c.globalAlpha = a;
     const col = RISK_COLOR[b.risk] || '#dcdcdc';
     const x1 = b.bbox[0]*dst.width, y1 = b.bbox[1]*dst.height;
     const x2 = b.bbox[2]*dst.width, y2 = b.bbox[3]*dst.height;
+    // Solo el recuadro con el color de su riesgo: sin etiqueta de texto
+    // (el detalle de cada persona y objeto está en el panel lateral).
     c.strokeStyle = col; c.lineWidth = 2;
     c.strokeRect(x1, y1, x2-x1, y2-y1);
-    const t = `${b.class_name}`;
-    c.font = '13px system-ui,sans-serif';
-    const tw = c.measureText(t).width;
-    c.fillStyle = col;
-    c.fillRect(x1, Math.max(0,y1-16), tw+8, 16);
-    c.fillStyle = '#141414';
-    c.fillText(t, x1+4, Math.max(12,y1-4));
   }
-  drawSkeletons(c, dst, d.esqueletos || []);
-  // banda de estado
+  c.globalAlpha = 1;
+  drawSkeletons(c, dst, d.esqueletos || [], alpha);
+  c.globalAlpha = 1;
+  // banda de estado (siempre visible)
   c.fillStyle = 'rgba(30,30,30,0.85)';
   c.fillRect(0,0,dst.width,40);
   c.fillStyle = '#fff'; c.font='13px system-ui,sans-serif';
@@ -446,6 +738,7 @@ function drawBoxes(src, dst, d) {
   c.fillStyle = RISK_COLOR[d.summary.level] || '#dcdcdc';
   c.font='bold 13px system-ui,sans-serif';
   c.fillText(`Riesgo: ${d.summary.level}`, 10, 34);
+  if (!zone.edit) renderZone();       // contorno de la zona (con «Mostrar siempre»)
 }
 
 // Esqueletos YOLOv8-Pose (coordenadas 0..1). Huesos por grupo; un punto
@@ -455,12 +748,19 @@ const BONES = {cabeza:[[0,1],[0,2],[1,3],[2,4],[3,5],[4,6]], brazos:[[5,7],[7,9]
                tronco:[[5,6],[5,11],[6,12],[11,12]], piernas:[[11,13],[13,15],[12,14],[14,16]]};
 const BONE_COLOR = {cabeza:'#50c8ff', brazos:'#ffdc50', tronco:'#ffffff', piernas:'#78ff78'};
 const SK_STATE = {perdida_equilibrio:'#e03c3c', inestable:'#f2a83c'};
-function drawSkeletons(c, dst, sks) {
+// Seguro de postura por reglas del esqueleto (skeleton/posture_rules.py)
+const SK_POSTURA = {caido:'#e03c3c', postura_incorrecta:'#f2a83c'};
+function drawSkeletons(c, dst, sks, alpha = 1) {
   const W = dst.width, H = dst.height;
   for (const sk of sks) {
     const k = sk.kps || []; if (!k.length) continue;
     const st = (sk.equilibrio || {}).estado || '';
-    const alarm = SK_STATE[st];
+    const ps = (sk.postura || {}).estado || '';
+    const alarm = SK_STATE[st] || SK_POSTURA[ps];
+    // intermitente: un esqueleto en alarma se ve siempre; el resto, con alpha
+    const a = alarm ? 1 : alpha;
+    if (a <= 0) continue;
+    c.globalAlpha = a;
     c.lineWidth = 2;
     for (const [g, bones] of Object.entries(BONES)) {
       c.strokeStyle = alarm || BONE_COLOR[g];
@@ -486,6 +786,8 @@ function drawSkeletons(c, dst, sks) {
       const m = sk.metricas || {};
       let t = `P${sk.id}` + (m.tronco_deg != null ? ` ${Math.round(m.tronco_deg)}°` : '');
       if (st === 'perdida_equilibrio') t += ' ¡DESEQUILIBRIO!';
+      if (ps === 'caido') t += ' ¡CAÍDO!';
+      else if (ps === 'postura_incorrecta') t += ' POSTURA';
       c.font = 'bold 12px system-ui,sans-serif';
       c.fillStyle = alarm || '#00ffff';
       c.fillText(t, sk.bbox[0]*W, Math.max(12, sk.bbox[1]*H - 20));
@@ -507,11 +809,23 @@ let cam = { on:false, stream:null, busy:false, last:0, sent:0, err:null, ok:fals
 // y, si la persona se movía, "caían en sitios que no pertenecen").
 let frameSeq = 0;
 const frameBuffer = new Map();
-const FRAME_BUFFER_MAX = 10;
+// 30 fps × ~0.5 s: margen para que el fotograma analizado siga en el buffer
+// aunque el motor vaya lento (con 10 se perdía en equipos modestos).
+const FRAME_BUFFER_MAX = 16;
+// Último fotograma pintado (ver "pintado monótono" en sendFrame).
+let shown = { fid: 0, img: null, sr: false };
+async function b64ToBitmap(s) {
+  const b64 = /^[0-9a-f]+$/i.test(s) ? hexToB64(s) : s;
+  const r = await fetch('data:image/jpeg;base64,' + b64);
+  return createImageBitmap(await r.blob());
+}
 let audioEl = null;  // <audio> para playback local del micrófono
 
 function stopCam() {
   cam.on = false;
+  if (shown.img && shown.img.close) shown.img.close();
+  shown = { fid: 0, img: null, sr: false };
+  frameBuffer.clear();
   if (cam.stream) { cam.stream.getTracks().forEach(t => t.stop()); cam.stream = null; }
   if (cam.video) { cam.video.remove(); cam.video = null; }
   if (audioEl) { audioEl.remove(); audioEl = null; }
@@ -526,6 +840,16 @@ function stopCam() {
 }
 
 $('#bstop').onclick = stopCam;
+
+// Casilla "Mostrar siempre cuadros y esqueletos" (recordada en el navegador)
+$('#overlayAlways').checked = overlay.always;
+$('#overlayAlways').onchange = (e) => {
+  overlay.always = e.target.checked;
+  // al volver a intermitente se muestran un momento antes de desvanecerse
+  overlay.until = performance.now() + OVERLAY_SHOW_MS;
+  try { localStorage.setItem('overlayAlways', overlay.always ? '1' : '0'); } catch (_) {}
+  renderZone();
+};
 
 $('#bcam').onclick = async () => {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -639,7 +963,7 @@ $('#bcam').onclick = async () => {
       `cámara ${v.videoWidth}×${v.videoHeight} → envío ${small.width}×${small.height} · ` +
       `${cam.sent} frames · ${cam.fps.toFixed(1)} fps · ` +
       `${$('#fast').checked ? 'mejora Real-ESRGAN x4 activa' : 'sin mejora de calidad'} · ` +
-      `umbral ${$('#ccam').value}` +
+      `sensibilidad ${$('#ccam').value}` +
       (cam.err ? ` · <b style="color:#e03c3c">${cam.err}</b>` : '');
   };
 
@@ -757,24 +1081,41 @@ $('#bcam').onclick = async () => {
       // lienzo para mostrar la SR. En modo normal (sin SR) el servidor
       // NO envía la imagen (el live a 30 fps sin ella), así que se usa el
       // frame nativo capturado aqui en el canvas `small`.
-      if (d.image) {
-        const img = new Image();
-        img.onload = () => drawBoxes(img, disp, d);
-        const b64 = /^[0-9a-f]+$/i.test(d.image) ? hexToB64(d.image) : d.image;
-        img.src = 'data:image/jpeg;base64,' + b64;
-      } else {
-        // Sin SR: dibujar sobre el frame que el motor ANALIZÓ (d.frame_id), no
-        // sobre el vivo, para que las cajas cuadren aun con el retardo async.
-        const fid = d.frame_id != null ? String(d.frame_id) : null;
-        if (fid != null && frameBuffer.has(fid)) {
-          const b = frameBuffer.get(fid);
-          frameBuffer.delete(fid);
-          const img = new Image();
-          img.onload = () => { drawBoxes(img, disp, d); URL.revokeObjectURL(img.src); };
-          img.src = URL.createObjectURL(b);
-        } else {
+      // Pintado MONÓTONO: nunca se muestra un fotograma más viejo que el último
+      // pintado. Causa de los "tirones" (el vídeo retrocedía y luego avanzaba):
+      // en modo asíncrono el servidor repite el mismo `frame_id` mientras el
+      // motor no termina el siguiente; la 1.ª respuesta pintaba ese fotograma
+      // (viejo, ~100-200 ms) y lo borraba del buffer, y las repetidas, al no
+      // encontrarlo, pintaban el fotograma VIVO (nuevo) -> viejo/nuevo/viejo.
+      // Además las respuestas "pendiente" y los onload de <img> asíncronos
+      // podían llegar desordenados. Ahora:
+      //   * frame_id < último pintado  -> se descarta (respuesta atrasada)
+      //   * frame_id == último pintado -> no se repinta (mismo fotograma), salvo
+      //     que llegue su versión mejorada (SR) y antes se pintó la nativa
+      //   * frame_id >  último pintado -> se decodifica y se pinta
+      //   * sin frame_id (motor arrancando) -> solo se pinta el vivo si aún no
+      //     hay nada en pantalla
+      const rfid = d.frame_id != null ? Number(d.frame_id) : null;
+      if (rfid == null || !Number.isFinite(rfid)) {
+        if (!shown.img) drawBoxes(small, disp, d);
+      } else if (rfid > shown.fid || (rfid === shown.fid && d.image && !shown.sr)) {
+        let src = null, isSr = false;
+        try {
+          if (d.image) { src = await b64ToBitmap(d.image); isSr = true; }
+          else if (frameBuffer.has(String(rfid))) src = await createImageBitmap(frameBuffer.get(String(rfid)));
+        } catch (_) { src = null; }
+        // se vuelve a comprobar tras el await: otra respuesta pudo adelantarse
+        if (src && (rfid > shown.fid || (rfid === shown.fid && isSr && !shown.sr))) {
+          if (shown.img && shown.img.close) shown.img.close();
+          shown = { fid: rfid, img: src, sr: isSr };
+          drawBoxes(src, disp, d);
+        } else if (src && src.close) {
+          src.close();
+        } else if (!src && !shown.img) {
           drawBoxes(small, disp, d);
         }
+        // los fotogramas anteriores al pintado ya no se mostrarán nunca
+        for (const k of [...frameBuffer.keys()]) if (Number(k) < rfid) frameBuffer.delete(k);
       }
       $('#camrisk').innerHTML = riskBox(d.summary) + `
           <div class="stat"><span>Inferencia</span><b>${d.timing.predict} ms</b></div>
@@ -830,11 +1171,48 @@ $('#bcam').onclick = async () => {
 // Panel de alertas (RQF08). Lee el historial del servidor (vídeo y, si el
 // módulo está activo, audio) y lo pinta en la pestaña de cámara.
 const SEV_TXT = {ALTO:'Crítico', MEDIO:'Precaución', BAJO:'Bajo', NEUTRO:'-', CONTEXTO:'-'};
+
+// ---------- sonido de alerta (solo en este navegador; nada sale del equipo) ----------
+// Suena una vez por alerta NUEVA de vídeo (las de audio ya tienen su pitido en
+// su pestaña). Los navegadores solo dejan sonar tras el primer clic.
+const alertBeep = { ctx: null, seen: null };
+try { $('#alertSound').checked = localStorage.getItem('alertSound') !== '0'; } catch (_) {}
+$('#alertSound').onchange = (e) => {
+  try { localStorage.setItem('alertSound', e.target.checked ? '1' : '0'); } catch (_) {}
+};
+document.addEventListener('click', () => {
+  if (!alertBeep.ctx) {
+    try { alertBeep.ctx = new (window.AudioContext || window.webkitAudioContext)(); } catch (_) {}
+  }
+}, { once: true });
+function beep(severity) {
+  const ctx = alertBeep.ctx;
+  if (!ctx || !$('#alertSound').checked) return;
+  const [freq, n] = severity === 'ALTO' ? [1046, 3] : [523, 1];
+  for (let i = 0; i < n; i++) {
+    const t = ctx.currentTime + i * 0.22, o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = 'sine'; o.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.25, t + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+    o.connect(g).connect(ctx.destination); o.start(t); o.stop(t + 0.18);
+  }
+}
+function checkNewAlerts(lista) {
+  const video = lista.filter(a => a.source !== 'audio');
+  const ids = new Set(video.map(a => a.alert_id));
+  if (alertBeep.seen === null) { alertBeep.seen = ids; return; }   // las ya existentes no suenan
+  const nuevas = video.filter(a => !alertBeep.seen.has(a.alert_id));
+  alertBeep.seen = ids;
+  if (nuevas.length) beep(nuevas.some(a => a.severity === 'ALTO') ? 'ALTO' : 'MEDIO');
+}
+
 async function cargarAlertas() {
   let d;
   try { d = await (await fetch('/api/alerts')).json(); }
   catch (e) { return; }
   const lista = d.alertas || [];
+  checkNewAlerts(lista);
   const html = lista.length ? lista.map(a => `
     <div class="alert-item ${a.severity==='ALTO'?'alert-alto':'alert-medio'} ${a.source==='audio'?'src-audio':''}" data-id="${a.alert_id}">
       <input type="checkbox" class="alert-sel" value="${a.alert_id}" title="Seleccionar">
@@ -920,10 +1298,113 @@ document.addEventListener('DOMContentLoaded', () => {
 // Función interna para PARAR todo el proyecto: primero se cierran en el
 // navegador la cámara, el micrófono y la cámara de Imagen; luego se pide al
 // servidor que libere modelos y se apague (POST /api/system/stop).
+// Confirmación propia (estilo del panel). Esc o clic fuera = cancelar;
+// el foco empieza en «Cancelar» para no apagar por accidente con Enter.
+function confirmarApagado() {
+  return new Promise(resolve => {
+    const dlg = $('#sysConfirm'), prev = document.activeElement;
+    const close = (ok) => {
+      dlg.classList.remove('on');
+      document.removeEventListener('keydown', onKey, true);
+      $('#sysConfirm-yes').onclick = $('#sysConfirm-no').onclick = dlg.onclick = null;
+      if (!ok) { stopKitsune(); if (prev && prev.focus) prev.focus(); }
+      resolve(ok);
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); close(false); }
+      if (e.key === 'Tab') {                       // el foco no sale del diálogo
+        const b = [$('#sysConfirm-no'), $('#sysConfirm-yes')];
+        const i = b.indexOf(document.activeElement);  // -1 si el foco estaba fuera
+        e.preventDefault();
+        // Tab avanza y Mayús+Tab retrocede; con dos botones se alternan
+        b[i < 0 ? 0 : (i + (e.shiftKey ? b.length - 1 : 1)) % b.length].focus();
+      }
+    };
+    $('#sysConfirm-yes').onclick = () => close(true);
+    $('#sysConfirm-no').onclick = () => close(false);
+    dlg.onclick = (e) => { if (e.target === dlg) close(false); };
+    document.addEventListener('keydown', onKey, true);
+    dlg.classList.add('on');
+    $('#sysConfirm-no').focus();
+    // el kitsune camina por el borde de esta caja mientras está abierta
+    startKitsune(() => kitsuneRect($('#sysConfirm.on .box')));
+  });
+}
+
+// ---------- easter egg: el kitsune ----------
+// Un zorrito camina por el borde de la caja «¿Seguro que quieres apagar el
+// sistema?», con los pies pegados al borde (encima, por el lado derecho,
+// boca abajo por debajo y por el lado izquierdo). Si se confirma, sigue
+// caminando alrededor del mensaje «Sistema detenido»; si se cancela, se va.
+// La imagen se precarga en memoria al abrir el panel: cuando el zorro sigue
+// en pantalla, el servidor ya puede estar apagado. Con «reducir movimiento»
+// se queda quieto encima de la caja.
+const KITSUNE = { url: null, frames: 10, fw: 69, fh: 64, scale: 0.5, fps: 12,
+                  speed: 70, raf: 0, target: null, t0: 0 };
+fetch('/static/kitsune.png').then(r => r.ok ? r.blob() : null)
+  .then(b => { if (b) KITSUNE.url = URL.createObjectURL(b); }).catch(() => {});
+
+// rectángulo que rodea a uno o varios elementos visibles
+function kitsuneRect(...els) {
+  const rs = els.filter(Boolean).map(e => e.getBoundingClientRect()).filter(r => r.width && r.height);
+  if (!rs.length) return null;
+  const l = Math.min(...rs.map(r => r.left)), t = Math.min(...rs.map(r => r.top));
+  const r = Math.max(...rs.map(r => r.right)), b = Math.max(...rs.map(r => r.bottom));
+  return { left: l, top: t, right: r, bottom: b };
+}
+
+function startKitsune(target) {
+  const el = $('#kitsune');
+  KITSUNE.target = target;                 // función que devuelve el rectángulo a rodear
+  if (!KITSUNE.url || !el) return;
+  if (KITSUNE.raf) return;                 // ya camina: solo cambia de caja
+  const s = KITSUNE.scale, w = KITSUNE.fw * s, h = KITSUNE.fh * s;
+  Object.assign(el.style, {
+    width: w + 'px', height: h + 'px',
+    backgroundImage: `url(${KITSUNE.url})`,
+    backgroundSize: `${KITSUNE.fw * KITSUNE.frames * s}px ${h}px`,
+  });
+  const quiet = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const place = (cx, cy, ang, frame) => {
+    el.style.backgroundPosition = `${-frame * w}px 0`;
+    el.style.transform = `translate(${cx - w / 2}px, ${cy - h / 2}px) rotate(${ang}deg)`;
+  };
+  KITSUNE.t0 = performance.now();
+  const step = (now) => {
+    const box = KITSUNE.target && KITSUNE.target();
+    if (!box) { el.style.display = 'none'; KITSUNE.raf = requestAnimationFrame(step); return; }
+    el.style.display = 'block';
+    // recorrido del CENTRO del zorro: a media altura por fuera de cada borde
+    const L = box.left - h / 2, R = box.right + h / 2;
+    const T = box.top - h / 2,  B = box.bottom + h / 2;
+    if (quiet) { place((box.left + box.right) / 2, T, 0, 0); KITSUNE.raf = requestAnimationFrame(step); return; }
+    const segs = [                                   // [desde, hasta, ángulo]
+      [[L, T], [R, T], 0],     // encima de la caja, hacia la derecha
+      [[R, T], [R, B], 90],    // lado derecho, bajando (pies hacia la caja)
+      [[R, B], [L, B], 180],   // debajo, boca abajo, hacia la izquierda
+      [[L, B], [L, T], 270],   // lado izquierdo, subiendo
+    ];
+    const lens = segs.map(([a, b]) => Math.hypot(b[0] - a[0], b[1] - a[1]));
+    const total = lens.reduce((x, y) => x + y, 0);
+    const t = (now - KITSUNE.t0) / 1000;
+    let d = (t * KITSUNE.speed) % total, i = 0;
+    while (i < 3 && d > lens[i]) { d -= lens[i]; i++; }
+    const [[ax, ay], [bx, by], ang] = segs[i], k = lens[i] ? d / lens[i] : 0;
+    place(ax + (bx - ax) * k, ay + (by - ay) * k, ang, Math.floor(t * KITSUNE.fps) % KITSUNE.frames);
+    KITSUNE.raf = requestAnimationFrame(step);
+  };
+  KITSUNE.raf = requestAnimationFrame(step);
+}
+function stopKitsune() {
+  cancelAnimationFrame(KITSUNE.raf);
+  KITSUNE.raf = 0; KITSUNE.target = null;
+  const el = $('#kitsune'); if (el) el.style.display = 'none';
+}
+
 async function detenerSistema() {
-  if (!confirm('¿Detener TODO el sistema? Se cerrarán la cámara, el audio, ' +
-               'la imagen, los modelos y el servidor. Para volver a usarlo hay ' +
-               'que arrancarlo de nuevo desde la consola.')) return;
+  if (!(await confirmarApagado())) return;
+  // sigue caminando, ahora alrededor del mensaje «Deteniendo / Sistema detenido»
+  startKitsune(() => kitsuneRect($('#stopped-t'), $('#stopped-m')));
   try { stopCam(); } catch (e) {}
   try { window.imagenPanel && window.imagenPanel.stop(); } catch (e) {}
   try { const ap = typeof initAudioPanel === 'function' && initAudioPanel();
@@ -934,7 +1415,8 @@ async function detenerSistema() {
     const r = await fetch('/api/system/stop', {method:'POST'});
     const d = await r.json().catch(() => ({}));
     ok = r.ok;
-    if (!ok) { $('#stopped-t').textContent = 'No se pudo detener';
+    if (!ok) { stopKitsune();
+               $('#stopped-t').textContent = 'No se pudo detener';
                $('#stopped-m').textContent = d.error || ('HTTP ' + r.status); return; }
   } catch (e) { ok = true; }      // el servidor puede cortar la conexión al apagarse
   for (let i = 0; i < 40; i++) {  // espera a que deje de responder (~20 s máx.)
@@ -944,7 +1426,7 @@ async function detenerSistema() {
   }
   $('#stopped-t').textContent = 'Sistema detenido';
   $('#stopped-m').textContent = 'Modelos liberados y servidor apagado. ' +
-    'Para volver a usarlo: python -m backend (o scripts/run.sh).';
+    'Para volver a usarlo, abre «Sistema Escaleras» desde el Escritorio.';
 }
 $('#bsys').onclick = detenerSistema;
 
