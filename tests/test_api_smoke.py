@@ -25,7 +25,12 @@ class ApiSmokeTest(unittest.TestCase):
         import ultralytics
         from backend.app import create_app
         cls.tmp = tempfile.TemporaryDirectory()
-        settings = load_settings(overrides=[f"alerts.dir={cls.tmp.name}"])
+        # TODO en una carpeta temporal: test_alert_routes borra «todas las
+        # alertas», y eso incluye las de AUDIO. Antes solo se aislaban las de
+        # vídeo y las de audio iban a outputs/audio_alerts/ (datos reales).
+        settings = load_settings(overrides=[
+            f"alerts.dir={cls.tmp.name}",
+            f"modules.audio.options.alerts_file={cls.tmp.name}/audio/alertas.jsonl"])
         cls.app = create_app(settings)
         cls.client = cls.app.test_client()
         assets = Path(ultralytics.__file__).parent / "assets"
@@ -111,6 +116,14 @@ class ApiSmokeTest(unittest.TestCase):
         self.assertEqual(f["metadata_captura"]["fuente"], "video_en_vivo")
 
     def test_alert_routes(self):
+        # las alertas de audio de esta app de prueba van a la carpeta temporal
+        audio = [s for s in self.app.extensions["escaleras"].alert_sources
+                 if getattr(s, "name", "") == "audio"]
+        for src in audio:
+            path = str(getattr(src, "path", "") or getattr(src, "alerts_file", "")
+                       or getattr(getattr(src, "store", None), "path", ""))
+            if path:
+                self.assertTrue(path.startswith(self.tmp.name), path)
         self.assertEqual(self.client.get("/api/alerts").status_code, 200)
         self.assertEqual(self.client.delete("/api/alertas").status_code, 200)
 

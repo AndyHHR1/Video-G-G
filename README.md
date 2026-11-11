@@ -7,6 +7,53 @@ el celular y objetos abandonados en los escalones**. Incluye un panel web con la
 cámara en vivo y una opción de **mejora de calidad de vídeo (Real-ESRGAN x4)**
 que funciona de forma fluida en tiempo real.
 
+## 🚀 Instalar y usar (sin escribir comandos)
+
+### Windows: doble clic y esperar
+
+1. **Descarga el proyecto.** En esta página de GitHub, botón verde
+   **«Code» → «Download ZIP»**.
+   *(Si estás viendo otra rama, elige antes `modelo-v5` en el selector de ramas,
+   arriba a la izquierda.)*
+2. **Descomprímelo** donde quieras (clic derecho sobre el ZIP → «Extraer
+   todo»). Mejor en una **ruta corta**, por ejemplo `D:\Escaleras`: Windows
+   limita la longitud de las rutas y algunas librerías traen carpetas muy
+   profundas.
+3. Abre la carpeta y haz **doble clic en `instalar.bat`**. Se abre una ventana
+   negra que lo hace todo sola. **Espera** a que diga **«Instalación
+   completa»** y pulsa una tecla para cerrarla.
+
+**Ya está.** En el Escritorio aparece **«Sistema Escaleras»**: **doble clic** y
+el sistema arranca y abre el panel en el navegador. Para apagarlo, cierra esa
+ventana negra o pulsa **«⏻ Detener sistema»** en el panel.
+
+Bueno saberlo:
+
+- **No hace falta instalar nada antes** (ni Python ni otros programas) ni
+  permisos de administrador. Todo queda **dentro de la carpeta** del proyecto:
+  para desinstalarlo, borra la carpeta y el acceso directo.
+- **La primera vez tarda**: descarga ~1,5 GB sin tarjeta gráfica o ~4 GB con
+  tarjeta NVIDIA (entre 5 y 30 minutos según tu internet). Las siguientes
+  veces arranca en segundos.
+- Si la instalación se corta (internet, apagón...), **vuelve a hacer doble
+  clic en `instalar.bat`**: continúa y solo instala lo que falta.
+- Si Windows muestra **«Windows protegió su PC»**, pulsa **«Más información» →
+  «Ejecutar de todas formas»** (pasa con cualquier archivo descargado de
+  internet).
+- Con **tarjeta NVIDIA** el sistema la usa sola; **sin ella** funciona igual
+  con el procesador (más lento, con aceleración OpenVINO).
+- La primera vez, el navegador pedirá **permiso para usar la cámara**.
+
+### Linux / macOS
+
+Descomprime el proyecto, abre una terminal en la carpeta y escribe
+`./instalar.sh` (es el único comando). Después usa el acceso directo
+**«Sistema Escaleras»** del menú de aplicaciones o del Escritorio.
+
+*(Detalles técnicos de la instalación: [§2](#2-instalación).)*
+
+---
+
 El vídeo trabaja **solo en vivo** (no se suben vídeos ni imágenes al motor de
 vídeo). Junto a él hay dos **módulos aparte**, integrados desde los repositorios
 de los otros grupos sin modificar el vídeo:
