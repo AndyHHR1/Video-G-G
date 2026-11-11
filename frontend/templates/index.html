@@ -164,6 +164,24 @@
              align-items:center; justify-content:center; flex-direction:column; gap:12px;
              text-align:center; padding:24px; }
   #stopped h2 { font-size:18px; color:var(--text); text-transform:none; letter-spacing:0; }
+  /* Confirmación antes de apagar (sustituye al confirm() del navegador) */
+  #sysConfirm { display:none; position:fixed; inset:0; z-index:10002; background:rgba(10,12,16,.72);
+                align-items:center; justify-content:center; padding:24px; }
+  #sysConfirm.on { display:flex; }
+  #sysConfirm .box { background:var(--panel); border:1px solid #5c2b2b; border-radius:12px;
+                     max-width:440px; width:100%; padding:22px 22px 18px;
+                     box-shadow:0 18px 48px rgba(0,0,0,.45); }
+  #sysConfirm h2 { font-size:17px; color:var(--text); text-transform:none; letter-spacing:0;
+                   margin-bottom:10px; }
+  #sysConfirm p { font-size:13.5px; color:var(--muted); line-height:1.55; margin:0 0 8px; }
+  #sysConfirm p b { color:var(--text); font-weight:600; }
+  #sysConfirm .acts { display:flex; justify-content:flex-end; gap:10px; margin-top:18px; }
+  #sysConfirm .danger { background:#b42323; }
+  #sysConfirm .danger:hover { background:#951b1b; }
+  #sysConfirm button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  /* Easter egg: el kitsune camina por los bordes al apagar el sistema */
+  #kitsune { position:fixed; left:0; top:0; z-index:10001; pointer-events:none; display:none;
+             image-rendering:pixelated; background-repeat:no-repeat; will-change:transform; }
   @media (max-width: 900px) { .grid { grid-template-columns:1fr; } }
 </style>
 {% if modules.get('audio') %}<link rel="stylesheet" href="/modulos/audio/static/audio-panel.css">{% endif %}
@@ -317,6 +335,24 @@
   <h2 id="stopped-t">Deteniendo el sistema…</h2>
   <div class="req" id="stopped-m">Se están cerrando la cámara, el audio, la imagen, los modelos y el servidor.</div>
 </div>
+
+<div id="sysConfirm" role="alertdialog" aria-modal="true" aria-labelledby="sysConfirm-t" aria-describedby="sysConfirm-d">
+  <div class="box">
+    <h2 id="sysConfirm-t">¿Seguro que quieres apagar el sistema?</h2>
+    <div id="sysConfirm-d">
+      <p>Esto <b>apagará todo</b>: se cerrarán la cámara, el audio y la imagen, se
+         liberarán los modelos y se detendrá el servidor. <b>Mientras esté apagado
+         no se vigilará la escalera.</b></p>
+      <p>Para volver a usarlo, abre otra vez <b>«Sistema Escaleras»</b> desde el Escritorio.</p>
+    </div>
+    <div class="acts">
+      <button class="ghost" id="sysConfirm-no">Cancelar</button>
+      <button class="danger" id="sysConfirm-yes">Sí, apagar</button>
+    </div>
+  </div>
+</div>
+
+<div id="kitsune" aria-hidden="true"></div>
 
 {% if modules.get('audio') %}
 <script src="/modulos/audio/static/audio-live.js"></script>
@@ -1262,10 +1298,90 @@ document.addEventListener('DOMContentLoaded', () => {
 // Función interna para PARAR todo el proyecto: primero se cierran en el
 // navegador la cámara, el micrófono y la cámara de Imagen; luego se pide al
 // servidor que libere modelos y se apague (POST /api/system/stop).
+// Confirmación propia (estilo del panel). Esc o clic fuera = cancelar;
+// el foco empieza en «Cancelar» para no apagar por accidente con Enter.
+function confirmarApagado() {
+  return new Promise(resolve => {
+    const dlg = $('#sysConfirm'), prev = document.activeElement;
+    const close = (ok) => {
+      dlg.classList.remove('on');
+      document.removeEventListener('keydown', onKey, true);
+      $('#sysConfirm-yes').onclick = $('#sysConfirm-no').onclick = dlg.onclick = null;
+      if (!ok && prev && prev.focus) prev.focus();
+      resolve(ok);
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); close(false); }
+      if (e.key === 'Tab') {                       // el foco no sale del diálogo
+        const b = [$('#sysConfirm-no'), $('#sysConfirm-yes')];
+        const i = b.indexOf(document.activeElement);  // -1 si el foco estaba fuera
+        e.preventDefault();
+        // Tab avanza y Mayús+Tab retrocede; con dos botones se alternan
+        b[i < 0 ? 0 : (i + (e.shiftKey ? b.length - 1 : 1)) % b.length].focus();
+      }
+    };
+    $('#sysConfirm-yes').onclick = () => close(true);
+    $('#sysConfirm-no').onclick = () => close(false);
+    dlg.onclick = (e) => { if (e.target === dlg) close(false); };
+    document.addEventListener('keydown', onKey, true);
+    dlg.classList.add('on');
+    $('#sysConfirm-no').focus();
+  });
+}
+
+// ---------- easter egg: el kitsune ----------
+// Al apagar el sistema, un zorrito camina por los cuatro bordes de la
+// pantalla, con los pies pegados a cada borde. La imagen se precarga en
+// memoria al abrir el panel: cuando aparece, el servidor ya puede estar
+// apagado. Con «reducir movimiento» se queda sentado abajo, sin caminar.
+const KITSUNE = { url: null, frames: 10, fw: 69, fh: 64, scale: 1.5, fps: 12, speed: 140, raf: 0 };
+fetch('/static/kitsune.png').then(r => r.ok ? r.blob() : null)
+  .then(b => { if (b) KITSUNE.url = URL.createObjectURL(b); }).catch(() => {});
+
+function startKitsune() {
+  const el = $('#kitsune');
+  if (!KITSUNE.url || !el) return;
+  const s = KITSUNE.scale, w = KITSUNE.fw * s, h = KITSUNE.fh * s;
+  Object.assign(el.style, {
+    display: 'block', width: w + 'px', height: h + 'px',
+    backgroundImage: `url(${KITSUNE.url})`,
+    backgroundSize: `${KITSUNE.fw * KITSUNE.frames * s}px ${h}px`,
+  });
+  const quiet = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const place = (cx, cy, ang, frame) => {
+    el.style.backgroundPosition = `${-frame * w}px 0`;
+    el.style.transform = `translate(${cx - w / 2}px, ${cy - h / 2}px) rotate(${ang}deg)`;
+  };
+  if (quiet) { place(innerWidth / 2, innerHeight - h / 2 - 8, 0, 0); return; }
+  const t0 = performance.now();
+  const step = (now) => {
+    // rectángulo que recorre el centro del zorro: a media altura de cada borde
+    const L = h / 2, T = h / 2, R = innerWidth - h / 2, B = innerHeight - h / 2;
+    const segs = [                                   // [desde, hasta, ángulo]
+      [[L, B], [R, B], 0],     // abajo, hacia la derecha
+      [[R, B], [R, T], -90],   // pared derecha, subiendo
+      [[R, T], [L, T], 180],   // techo, hacia la izquierda
+      [[L, T], [L, B], 90],    // pared izquierda, bajando
+    ];
+    const lens = segs.map(([a, b]) => Math.hypot(b[0] - a[0], b[1] - a[1]));
+    const total = lens.reduce((x, y) => x + y, 0);
+    const t = (now - t0) / 1000;
+    let d = (t * KITSUNE.speed) % total, i = 0;
+    while (d > lens[i]) { d -= lens[i]; i++; }
+    const [[ax, ay], [bx, by], ang] = segs[i], k = lens[i] ? d / lens[i] : 0;
+    place(ax + (bx - ax) * k, ay + (by - ay) * k, ang, Math.floor(t * KITSUNE.fps) % KITSUNE.frames);
+    KITSUNE.raf = requestAnimationFrame(step);
+  };
+  KITSUNE.raf = requestAnimationFrame(step);
+}
+function stopKitsune() {
+  cancelAnimationFrame(KITSUNE.raf);
+  const el = $('#kitsune'); if (el) el.style.display = 'none';
+}
+
 async function detenerSistema() {
-  if (!confirm('¿Detener TODO el sistema? Se cerrarán la cámara, el audio, ' +
-               'la imagen, los modelos y el servidor. Para volver a usarlo hay ' +
-               'que arrancarlo de nuevo desde la consola.')) return;
+  if (!(await confirmarApagado())) return;
+  startKitsune();
   try { stopCam(); } catch (e) {}
   try { window.imagenPanel && window.imagenPanel.stop(); } catch (e) {}
   try { const ap = typeof initAudioPanel === 'function' && initAudioPanel();
@@ -1276,7 +1392,8 @@ async function detenerSistema() {
     const r = await fetch('/api/system/stop', {method:'POST'});
     const d = await r.json().catch(() => ({}));
     ok = r.ok;
-    if (!ok) { $('#stopped-t').textContent = 'No se pudo detener';
+    if (!ok) { stopKitsune();
+               $('#stopped-t').textContent = 'No se pudo detener';
                $('#stopped-m').textContent = d.error || ('HTTP ' + r.status); return; }
   } catch (e) { ok = true; }      // el servidor puede cortar la conexión al apagarse
   for (let i = 0; i < 40; i++) {  // espera a que deje de responder (~20 s máx.)
@@ -1286,7 +1403,7 @@ async function detenerSistema() {
   }
   $('#stopped-t').textContent = 'Sistema detenido';
   $('#stopped-m').textContent = 'Modelos liberados y servidor apagado. ' +
-    'Para volver a usarlo: python -m backend (o scripts/run.sh).';
+    'Para volver a usarlo, abre «Sistema Escaleras» desde el Escritorio.';
 }
 $('#bsys').onclick = detenerSistema;
 
