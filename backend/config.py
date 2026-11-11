@@ -172,6 +172,16 @@ class PostureRulesCfg:
 
 
 @dataclass
+class SkeletonSignalsCfg:
+    """Señales de conducta por esqueleto (skeleton/signals.py), en torsos."""
+    hand_face_torso: float = 0.6       # muñeca así de cerca de la nariz
+    phone_face_torso: float = 1.2      # teléfono (COCO) así de cerca de la nariz
+    rail_lateral_torso: float = 0.5    # mano separada del cuerpo hacia la barandilla
+    rail_above_shoulder_torso: float = 0.2
+    rail_below_hip_torso: float = 0.6
+
+
+@dataclass
 class SkeletonCfg:
     enabled: bool = True
     model: str = "models/pose/yolov8s-pose.pt"
@@ -188,6 +198,7 @@ class SkeletonCfg:
     perspective: SkeletonPerspectiveCfg = field(default_factory=SkeletonPerspectiveCfg)
     balance: BalanceCfg = field(default_factory=BalanceCfg)
     postura: PostureRulesCfg = field(default_factory=PostureRulesCfg)
+    senales: SkeletonSignalsCfg = field(default_factory=SkeletonSignalsCfg)
     # rutas absolutas, rellenadas por Settings
     model_path: Any = None
     tracker_path: Any = None
@@ -214,6 +225,8 @@ class HardwareCfg:
     low_vram_gb: float = 4.5       # auto: <= esta VRAM -> baja_vram
     baja_vram: dict = field(default_factory=_baja_vram_default)
     cpu: dict = field(default_factory=_cpu_default)   # auto: sin GPU -> cpu
+    # En CPU, exportar y usar los modelos en OpenVINO (perception/accel.py)
+    openvino_cpu: bool = True
     # Rellenados en el arranque por backend.hardware.apply_profile
     active: str = "normal"
     gpu: dict = field(default_factory=dict)

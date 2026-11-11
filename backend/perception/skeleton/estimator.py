@@ -35,7 +35,9 @@ class PoseEstimator:
                  iou=0.6, tracker="bytetrack.yaml", kp_conf_min=0.45,
                  min_keypoints=5, half=False):
         from ultralytics import YOLO
-        self.model = YOLO(model_path)
+        from ..accel import cpu_weights
+        # en CPU, la versión OpenVINO (~4x más rápida con YOLOv8n-Pose)
+        self.model = YOLO(cpu_weights(model_path, device, imgsz))
         self.device = device
         self.imgsz, self.conf, self.iou = imgsz, conf, iou
         self.tracker = tracker

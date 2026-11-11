@@ -51,7 +51,7 @@ y el panel tiene un botón **«Detener sistema»** que apaga todo de forma orden
 | Lo que pide el cliente | Cómo lo resuelve el sistema |
 |---|---|
 | Ver en la interfaz a las personas caminando por la escalera (cámara en vivo) | Pestaña **Cámara en vivo**: la webcam del navegador (o una cámara IP vía `/api/stream`) se analiza a ~30 fps y las cajas se dibujan sobre el vídeo. |
-| Detectar **persona de pie erguida** | Clase `persona_erguida` (riesgo BAJO) por geometría de pose (MediaPipe) o por el detector propio. |
+| Detectar **persona de pie erguida** | Clase `persona_erguida` (riesgo BAJO) por el clasificador del Modelo v5, verificada por las reglas del esqueleto de cada persona. |
 | Detectar **pérdida de equilibrio** | Clase `persona_desequilibrio` + señal `tambaleo` (inclinación del tronco > 12°, asimetría de rodillas). Riesgo ALTO. |
 | Detectar **persona distraída** | Señal `distraccion`: mano junto a la cara con cabeza inclinada, o un **celular** (COCO) a menos de 0.14 del rostro. Riesgo MEDIO. |
 | Detectar **no uso del pasamanos** | Señal `sin_pasamanos`: ninguna muñeca a la altura de la barandilla y brazo separado del tronco. Riesgo MEDIO. |
@@ -74,7 +74,31 @@ Requisitos: **Python 3.10 – 3.12**, Linux / WSL2 / macOS / Windows. GPU NVIDIA
 opcional (recomendada; mínimo probado: perfil de **GTX 1650, 4 GB**). Todo se instala **dentro de un entorno
 virtual**: no se ensucia el sistema.
 
-### 2.1 Instalación automática (Linux / WSL2)
+### 2.0 Instalador con doble clic (recomendado, cualquier máquina)
+
+```text
+Windows ............ doble clic en  instalar.bat
+Linux / WSL / Mac .. ./instalar.sh
+(añadir --cpu para forzar la versión sin GPU)
+```
+
+El instalador **comprueba cada paquete y solo instala lo que falta** (o no
+tiene la versión correcta), así que se puede repetir sin miedo:
+
+1. Descarga **uv** (gestor de Python de Astral) e instala **Python 3.12**: no
+   hace falta tener Python ni permisos de administrador.
+2. Crea el entorno `.venv` y detecta la GPU: **NVIDIA → PyTorch CUDA 12.8**;
+   sin GPU → PyTorch CPU + **OpenVINO** (2-4× más rápido en procesador).
+3. Comprueba e instala `requirements/` (base, módulos de audio e imagen).
+4. Descarga y verifica (SHA-256) los modelos, y hace un diagnóstico.
+5. Crea el **arrancador**: `iniciar.bat` / `iniciar.sh` y un acceso directo
+   **«Sistema Escaleras»** en el Escritorio (en WSL, en el Escritorio de
+   Windows). Doble clic → arranca el sistema y abre el panel en el navegador.
+
+**Todo queda dentro de la carpeta del proyecto** (`.tools/`, `.python/`,
+`.venv/`, `.cache/`): no toca el sistema y se borra borrando la carpeta.
+
+### 2.1 Instalación automática con setup.sh (Linux / WSL2)
 
 ```bash
 git clone https://github.com/AndyHHR1/Video-G-G.git
@@ -251,7 +275,7 @@ flowchart TB
     subgraph CORE["núcleo"]
         ENG["perception/engine.py<br/>RiskEngine.step()"]
         DET["perception/detectors.py<br/>COCO + Modelo v5"]
-        POSE["perception/pose.py<br/>MediaPipe Pose"]
+        POSE["perception/skeleton/<br/>YOLOv8-Pose por persona"]
         TRK["perception/tracking.py<br/>IoU tracker"]
         ALM["perception/alerts.py<br/>persistencia + evidencia"]
         SR["enhancement/<br/>Real-ESRGAN x4"]
@@ -318,7 +342,7 @@ Claves del diseño:
 ```
 fotograma ─► 1 personas (YOLOv8s COCO) ──────────────┐
           ─► 2 escalera (Modelo v5, detector) ───────┤
-          ─► 3 pose (MediaPipe) → señales ───────────┤
+          ─► 3 esqueletos (YOLOv8-Pose) → señales ───┤
           ─► 4 objetos (YOLOv8s COCO) ───────────────┤
                                                      ▼
           5 postura por persona: geometría de pose (si es la persona emparejada)
@@ -407,8 +431,9 @@ El único cambio a su código es que los modelos se cargan en el primer uso desd
 
 `backend/perception/skeleton/` — pensado para **cámara alta en diagonal (vista
 picada), varias personas y un pasamanos que tapa parte del cuerpo**. Corre
-dentro del motor de riesgo (etapa 3b, cada `skeleton.every` fotogramas) junto a
-MediaPipe, que sigue dando las señales de pasamanos y distracción.
+dentro del motor de riesgo (etapa 3, cada `skeleton.every` fotogramas) y da,
+**por cada persona**, el equilibrio, el seguro de postura y las señales de
+pasamanos y distracción (`signals.py`), que antes venían de MediaPipe Pose.
 
 | Paso | Archivo | Qué hace |
 |---|---|---|
@@ -432,10 +457,8 @@ se clasifica también con reglas sobre sus puntos, en torsos de esa persona
 
 Funciona como seguro en los dos sentidos (`RiskEngine._link_posture`): si el
 esqueleto ve una caída y el modelo no, gana el esqueleto (ALTO); si el modelo
-ve una caída en el recorte, o MediaPipe la ve en su única pose, pero el
-esqueleto está claramente de pie, gana el esqueleto (de pie, sin alerta). Con
-peatones reales de MOT15, 168 de 192 caídas falsas venían de MediaPipe
-emparejando su pose con la persona equivocada. Un criterio que no se ve (pasamanos) no vota, y el
+ve una caída en el recorte pero el esqueleto está claramente de pie, gana el
+esqueleto (de pie, sin alerta). Un criterio que no se ve (pasamanos) no vota, y el
 estado debe sostenerse (0.6 s caído, 1 s postura) para confirmarse.
 Agacharse a recoger algo (manos a los pies, cabeza a la cadera, cuerpo no
 tendido) no cuenta como caída; subir un escalón dobla una sola rodilla.
@@ -517,18 +540,22 @@ propio daba 0.08 de confianza donde COCO daba 0.92) y para detectar **objetos
 sobre los escalones**. Reparto: *COCO decide dónde hay gente; el Modelo v5
 decide qué postura tiene*.
 
-### 5.3 MediaPipe Pose (BlazePose, variante *lite*)
+### 5.3 YOLOv8-Pose — esqueleto de cada persona (sustituye a MediaPipe Pose)
 
-Detector de persona + regresor de **33 puntos corporales** en modo *tracking*
-(20 ms frente a 41 ms en modo imagen). Corre en CPU (XNNPACK). De los puntos se
-derivan: inclinación del eje tobillo-cadera, altura de la cabeza sobre la
-cadera, posición de muñecas respecto a hombros y cara. Umbrales medidos:
+17 puntos COCO por persona con identidad (ByteTrack). De ellos salen el
+equilibrio (§4.7), el seguro de postura y las señales de conducta
+(`skeleton/signals.py`, distancias en torsos de cada persona):
 
-| Postura | Regla |
+| Señal | Regla |
 |---|---|
-| caído | inclinación > 25° **o** cabeza/eje < 0.55 |
-| pérdida de equilibrio | inclinación > 12° **o** cabeza/eje < 0.75 |
-| erguido | resto |
+| distracción | muñeca junto a la cara con el brazo levantado, o teléfono (COCO) junto a la nariz |
+| sin pasamanos | hay escalera en la escena y ninguna mano se separa del cuerpo a la altura de la cintura/pecho |
+
+**Por qué se retiró MediaPipe Pose del motor:** describe **una sola persona
+por fotograma** y, con varias, emparejaba su pose con la caja equivocada.
+Medido con peatones reales de MOT15: 168 de 192 caídas falsas venían de ahí;
+sin MediaPipe, las caídas falsas bajaron a 25 y los «desequilibrios» falsos
+de 76 a 0. MediaPipe **Face** se sigue usando para anonimizar (§8).
 
 ### 5.4 Real-ESRGAN x4 — mejora de calidad
 
@@ -785,7 +812,8 @@ rama `semana-7` sobre la misma secuencia: salidas **idénticas** (ver
 | Recurso | Uso | Licencia / origen |
 |---|---|---|
 | [Ultralytics YOLOv8](https://github.com/ultralytics/ultralytics) | Detector y pesos COCO | AGPL-3.0 |
-| [MediaPipe](https://github.com/google-ai-edge/mediapipe) | Pose y detección de rostros | Apache-2.0 |
+| [MediaPipe](https://github.com/google-ai-edge/mediapipe) | Detección de rostros (anonimización) | Apache-2.0 |
+| [OpenVINO](https://github.com/openvinotoolkit/openvino) | Aceleración en procesador (equipos sin GPU) | Apache-2.0 |
 | [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) (X. Wang et al., ICCVW 2021) | Superresolución | BSD-3-Clause |
 | [brigitteve/percepcion](https://github.com/brigitteve/percepcion) | Módulo de audio (detector `final.py` + MLP de caídas) | grupo de audio del curso |
 | [AndreCastAst/Repo-video-imagen-audio @ s7-imagen](https://github.com/AndreCastAst/Repo-video-imagen-audio/tree/s7-imagen) | Módulo de imagen | grupo de imagen del curso |
@@ -805,7 +833,7 @@ Los datasets pertenecen a sus autores y se usan solo con fines académicos.
 ## 15. Limitaciones conocidas
 
 - Las señales de pasamanos y distracción son **reglas sobre keypoints** calibradas con pocas escenas; no hay ground truth público para medirlas.
-- MediaPipe Pose describe **una persona por fotograma**; con varias personas, las señales de pose se asignan a la que mejor encaja.
+- Las señales de pasamanos y distracción son reglas sobre los puntos del esqueleto; sin la posición real de la barandilla, «sin pasamanos» es una aproximación (mano separada del cuerpo a la altura de la cintura).
 - El Modelo v5 se evaluó con fotos de stock y peatones de MOT15, no con la escalera real en vista diagonal; la confirmación de caída se apoya en la geometría de pose y en la persistencia temporal.
 - El servidor de Flask es de un solo proceso (adecuado para una cámara). Sin HTTPS no hay cifrado.
 - El perfil de GTX 1650 se validó en una RTX 5070 limitando la memoria a 3.6 GB y forzando FP32; los tiempos reales en una 1650 serán mayores (la vista en vivo sigue a 30 fps porque la detección es asíncrona).

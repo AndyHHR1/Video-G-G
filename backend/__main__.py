@@ -5,7 +5,7 @@ Ejemplos:
     python -m backend --host 0.0.0.0 --port 8000
     python -m backend --device cpu --no-sr
     python -m backend --profile baja_vram          # fuerza el perfil GTX 1650
-    python -m backend --set engine.pose_every=4 --set thresholds.alert=0.4
+    python -m backend --set engine.people_every=4 --set thresholds.alert=0.4
     python -m backend --stop                       # detiene un servidor en marcha
 """
 from __future__ import annotations

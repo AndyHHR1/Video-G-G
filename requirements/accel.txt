@@ -1,0 +1,4 @@
+# Aceleración en procesador (equipos SIN GPU NVIDIA): los modelos se ejecutan
+# con OpenVINO, 2-4x más rápido que PyTorch en CPU (backend/perception/accel.py).
+# El instalador solo lo instala cuando no hay GPU.
+openvino>=2025.0,<2027

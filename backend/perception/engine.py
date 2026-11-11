@@ -4,11 +4,11 @@
        │
        ├─ CocoDetector.people()      ¿dónde hay personas?          RQF02
        ├─ PostureDetector.stairs()   ¿dónde está la escalera?      contexto
-       ├─ PoseAnalyzer.analyse()     pasamanos, distracción, tambaleo  RQF02 (2)(3)(4)
        ├─ SkeletonAnalyzer.step()    YOLOv8-Pose: 17 puntos por persona, ID,
-       │                             cinemática y pérdida de equilibrio  RQF02 (4)
+       │                             equilibrio y seguro de postura  RQF02 (4)
        ├─ CocoDetector.obstacles()   objetos sobre el escalón      RQF02 (1)
-       ├─ postura de cada persona    geometría de pose > recorte   RQF03
+       ├─ postura de cada persona    clasificador del Modelo v5    RQF03
+       ├─ señales por esqueleto      pasamanos, distracción        RQF02 (2)(3)
        ├─ IoUTracker.update()        identidad estable             RQF05
        ├─ AlertManager               persistencia + alerta         RQF06 · RQF07
        └─ veredicto global + estado del sistema                    RQNF09 · RQNF26
@@ -16,8 +16,9 @@
 CADENCIAS. Cada etapa tiene su propia frecuencia (`engine.*_every`): una
 mochila en un escalón o la sujeción del pasamanos no cambian en tres
 fotogramas, y ejecutar todo en cada frame no cabe en el presupuesto de 33 ms.
-Entre ejecuciones se reutiliza el último resultado de esa etapa. Con
-`force=True` (imagen fija) se ejecuta todo.
+Entre ejecuciones se reutiliza el último resultado de esa etapa. Un
+planificador ejecuta como mucho UNA etapa pesada por fotograma (`_schedule`)
+para que no se sumen en picos. Con `force=True` (imagen fija) se ejecuta todo.
 """
 from __future__ import annotations
 
@@ -30,9 +31,8 @@ from ..config import Settings
 from ..privacy.anonymizer import FaceAnonymizer
 from .alerts import AlertManager
 from .catalog import (FALL_CLASSES, NONERGO_CLASSES, RISK_CATALOG, RISK_ORDER,
-                      SAFE_CLASSES, TAMBALEO_META)
+                      SAFE_CLASSES)
 from .detectors import CocoDetector, PostureDetector
-from .pose import PoseAnalyzer, best_person_match, posture_from_geometry
 from .tracking import IoUTracker, iou
 
 BALANCE_RISK = "desequilibrio_pose"
@@ -55,7 +55,6 @@ class RiskEngine:
         self.conf = conf if conf is not None else s.inference.conf
         e, th, ps = s.engine, s.thresholds, s.persistence
 
-        self.pose_every = e.pose_every
         self.people_every = e.people_every
         self.stairs_every = e.stairs_every
         self.obstacle_every = e.obstacle_every
@@ -64,13 +63,19 @@ class RiskEngine:
         self.th = th
 
         # --- componentes -------------------------------------------------
+        from . import accel
+        accel.configure(getattr(s.hardware, "openvino_cpu", True))
         self.posture = PostureDetector(str(s.detector_path),
                                        str(s.posture_path), self.device)
         self.coco = CocoDetector(str(s.coco_path), self.device,
                                  obstacle_conf=th.obstacle,
                                  person_conf=e.person_conf,
                                  person_imgsz=e.person_imgsz)
-        self.pose = PoseAnalyzer(enabled=enable_pose)
+        # MediaPipe Pose ya no se usa en el motor: describía UNA persona y
+        # emparejaba su pose con la caja equivocada en escenas con gente. Las
+        # señales salen del esqueleto de cada persona (skeleton/signals.py).
+        # (MediaPipe Face sigue anonimizando las evidencias.)
+        self.signals_cfg = s.skeleton.senales
         self.skeleton = None
         self.skeleton_every = max(1, s.skeleton.every)
         if s.skeleton.enabled and enable_pose:
@@ -101,8 +106,8 @@ class RiskEngine:
         self._last_people: list | None = None
         self._last_stairs: list | None = None
         self._last_obstacles: list = []
-        self._last_geom: str | None = None
-        self._last_landmarks: list | None = None
+        # planificador: próximo fotograma en que toca cada etapa pesada
+        self._next_due: dict[str, int] = {}
         # [(caja, postura, prob), ...] de la última pasada del clasificador
         self._last_class: list | None = None
         self._last_skeletons: list | None = None
@@ -124,13 +129,63 @@ class RiskEngine:
         self._last_people = None
         self._last_stairs = None
         self._last_obstacles = []
-        self._last_geom = None
-        self._last_landmarks = None
+        self._next_due = {}
         self._last_class = None
         self._last_skeletons = None
         self._fall_held.clear()
         if self.skeleton is not None:
             self.skeleton.reset()
+
+    # ------------------------------------------------------------------ #
+    # Planificador de etapas pesadas
+    # ------------------------------------------------------------------ #
+    # Prioridad a igualdad de retraso: personas (todo depende de ellas),
+    # esqueleto (equilibrio y señales), escalera, obstáculos.
+    STAGES = ("people", "skeleton", "stairs", "obstacles")
+
+    def _schedule(self, n: int, force: bool = False) -> set[str]:
+        periods = {"people": self.people_every, "skeleton": self.skeleton_every,
+                   "stairs": self.stairs_every, "obstacles": self.obstacle_every}
+        active = [k for k in self.STAGES
+                  if k != "skeleton" or self.skeleton is not None]
+        if force:
+            for k in active:
+                self._next_due[k] = n + max(1, periods[k])
+            return set(active)
+        due = [k for k in active if self._next_due.get(k, 0) <= n]
+        if not due:
+            return set()
+        # la más atrasada primero; a igualdad, por prioridad (orden de STAGES)
+        k = min(due, key=lambda s: (self._next_due.get(s, 0), self.STAGES.index(s)))
+        self._next_due[k] = n + max(1, periods[k])
+        return {k}
+
+    # ------------------------------------------------------------------ #
+    # Señales por esqueleto -> caja de su persona
+    # ------------------------------------------------------------------ #
+    def _skeleton_signals(self, skeletons: list, dets: list, phones: list,
+                          stairs_present: bool) -> list[dict]:
+        from .skeleton.signals import skeleton_signals
+        out: list[dict] = []
+        people = [d for d in dets if d.get("class_id") != 3]
+        for sk in skeletons:
+            sigs = skeleton_signals(sk, self.signals_cfg, phones, stairs_present)
+            if not sigs:
+                continue
+            sigs = [{**s_, **RISK_CATALOG[s_["tipo"]]} for s_ in sigs]
+            out.extend(sigs)
+            best = max(people, key=lambda d: iou(d["bbox"], sk["bbox"]),
+                       default=None)
+            if best is None or iou(best["bbox"], sk["bbox"]) < 0.3:
+                continue
+            current = best.get("riesgo", "NEUTRO")
+            best["senales"] = sorted(set(best.get("senales", []))
+                                     | {s_["tipo"] for s_ in sigs})
+            best["riesgo"] = max([current] + [s_["riesgo"] for s_ in sigs],
+                                 key=lambda r: RISK_ORDER.get(r, 0))
+            if best["riesgo"] != current:
+                best["riesgo_por_clase"] = current
+        return out
 
     @property
     def has_pending_evidence(self) -> bool:
@@ -345,42 +400,34 @@ class RiskEngine:
         self._frame_no += 1
         n = self._frame_no
 
-        def due(every: int) -> bool:
-            return force or n % max(1, every) == 0
+        # --- planificador: como mucho UNA etapa pesada por fotograma -------
+        # Antes cada etapa corría a su cadencia (n % every == 0) y, cuando
+        # coincidían varias en el mismo fotograma, se sumaban: picos de
+        # 100-130 ms (p95) frente a ~20 ms de mediana. Ahora, de las etapas
+        # que tocan, se ejecuta la más atrasada (a igualdad, por prioridad) y
+        # el resto espera al fotograma siguiente. Una etapa que nunca se ha
+        # ejecutado (`None`) toca ya. Con `force` (imagen fija) se ejecuta todo.
+        run = self._schedule(n, force)
 
         # --- 1. personas (COCO) ------------------------------------------
-        # `None` = aún no se ha ejecutado; una lista vacía = se ejecutó y no
-        # había nadie. Antes se usaba `not lista`, y con la escena vacía (o sin
-        # escalera, abajo) la etapa corría en TODOS los fotogramas en lugar de
-        # a su cadencia: medido, la escalera costaba ~14 ms/frame en vez de ~1.
-        if due(self.people_every) or self._last_people is None:
+        t = time.perf_counter()
+        if "people" in run:
             self._last_people = self.coco.people(frame)
-        people = self._last_people
-        stages["people"] = round((time.perf_counter() - t0) * 1000, 2)
+        people = self._last_people or []
+        stages["people"] = round((time.perf_counter() - t) * 1000, 2)
 
         # --- 2. escalera (contexto, cadencia lenta) -----------------------
         t = time.perf_counter()
-        if due(self.stairs_every) or self._last_stairs is None:
+        if "stairs" in run:
             self._last_stairs = self.posture.stairs(frame, self.max_stairs_boxes)
-        stairs = self._last_stairs
+        stairs = self._last_stairs or []
         stages["stairs"] = round((time.perf_counter() - t) * 1000, 2)
 
-        # --- 3. pose (RQF02 2-3-4) ----------------------------------------
-        # Si MediaPipe falla se pierde la señal de postura, pero el fotograma
-        # sigue produciendo cajas y obstáculos.
+        # --- 3. esqueletos YOLOv8-Pose (varias personas, con ID) ----------
+        # Dan, por persona: equilibrio, seguro de postura y las señales de
+        # pasamanos / distracción (antes MediaPipe, que solo veía a UNA).
         t = time.perf_counter()
-        pose: list = []
-        if due(self.pose_every):
-            try:
-                pose = self.pose.analyse(frame)
-            except Exception as exc:                        # noqa: BLE001
-                self._fail("pose", exc)
-        stages["pose"] = round((time.perf_counter() - t) * 1000, 2)
-
-        # --- 3b. esqueletos YOLOv8-Pose (varias personas, con ID) ---------
-        t = time.perf_counter()
-        if self.skeleton is not None and (due(self.skeleton_every)
-                                          or self._last_skeletons is None):
+        if self.skeleton is not None and "skeleton" in run:
             try:
                 self._last_skeletons = self.skeleton.step(frame)
             except Exception as exc:                        # noqa: BLE001
@@ -388,15 +435,9 @@ class RiskEngine:
         skeletons = self._last_skeletons or []
         stages["skeleton"] = round((time.perf_counter() - t) * 1000, 2)
 
-        pose_signals = []
-        for person in pose:
-            for sig in person["signals"]:
-                meta = RISK_CATALOG.get(sig["tipo"], TAMBALEO_META)
-                pose_signals.append({**sig, **meta})
-
         # --- 4. obstáculos (RQF02 1) --------------------------------------
         t = time.perf_counter()
-        if due(self.obstacle_every):
+        if "obstacles" in run:
             try:
                 self._last_obstacles = self.coco.obstacles(frame)
             except Exception as exc:                        # noqa: BLE001
@@ -404,28 +445,13 @@ class RiskEngine:
         obstacles = self._last_obstacles
         stages["obstacles"] = round((time.perf_counter() - t) * 1000, 2)
 
-        # --- 5. postura de cada persona -----------------------------------
-        # La geometría de la pose manda sobre el recorte. Medido en test:
-        #   de pie: recorte 31 % vs geometría 64 %; caído: 78 % vs 93 %.
-        # La pose se empareja con la caja que mejor encaja; el resto de
-        # personas se clasifican por recorte.
-        if pose:
-            self._last_geom = posture_from_geometry(pose)
-            self._last_landmarks = pose[0]["landmarks"]
-        geom = self._last_geom
-        pose_idx = best_person_match(self._last_landmarks, people, frame.shape)
-        if pose_idx < 0 and len(people) == 1:
-            pose_idx = 0          # una sola persona: la pose es suya
-
-        run_class = (n % max(1, self.classify_every) == 0
-                     or not self._last_class)
+        # --- 5. postura de cada persona (clasificador del Modelo v5) ------
+        # Se clasifica cuando se refrescan las cajas de personas (entre medias
+        # las cajas no cambian y la caché por solape acierta siempre). El
+        # seguro de postura del esqueleto corrige después (_link_posture).
+        run_class = "people" in run or not self._last_class
         t = time.perf_counter()
-        # Postura por clasificador, en UN lote para todas las personas que no
-        # tiene la pose. Entre medias se reutiliza la postura de la caja
-        # anterior que más solapa (por persona; antes la caché guardaba una
-        # sola caja y, con varias personas, se cruzaban las posturas).
-        need = [i for i in range(len(people))
-                if not (geom is not None and i == pose_idx)]
+        need = list(range(len(people)))
         by_idx: dict[int, tuple] = {}
         if need:
             if run_class:
@@ -449,11 +475,8 @@ class RiskEngine:
                         self._last_class = (self._last_class or []) + [(people[i], *p)]
         dets: list[dict] = []
         for i, box in enumerate(people):
-            is_pose = geom is not None and i == pose_idx
-            if is_pose:
-                name, conf_p, origin = geom, 0.55, "geometria de pose"
-            else:
-                name, conf_p, origin = by_idx.get(i, ("", 0.0, "modelo"))
+            is_pose = False
+            name, conf_p, origin = by_idx.get(i, ("", 0.0, "modelo"))
             if not name:
                 name, conf_p, origin = "persona", 0.4, "sin clasificar"
 
@@ -487,16 +510,12 @@ class RiskEngine:
             dets.append(det)
         stages["classify"] = round((time.perf_counter() - t) * 1000, 2)
 
-        # Las señales de pose pertenecen a la persona emparejada: su caja
-        # toma el mayor riesgo entre su clase y sus señales.
-        if pose_signals and 0 <= pose_idx < len(dets):
-            d = dets[pose_idx]
-            current = d.get("riesgo", "NEUTRO")
-            d["senales"] = [x["tipo"] for x in pose_signals]
-            d["riesgo"] = max([current] + [x["riesgo"] for x in pose_signals],
-                              key=lambda r: RISK_ORDER.get(r, 0))
-            if d["riesgo"] != current:
-                d["riesgo_por_clase"] = current
+        # --- 5b. señales por esqueleto (pasamanos, distracción) ------------
+        # Cada señal va a la caja de SU persona (la que más solapa con su
+        # esqueleto), que toma el mayor riesgo entre su clase y sus señales.
+        phones = [o for o in obstacles if o.get("tipo") == "telefono"]
+        pose_signals = self._skeleton_signals(skeletons, dets, phones,
+                                              stairs_present=bool(stairs))
 
         # --- 6. seguimiento + confirmación de caídas ----------------------
         self.tracker.update(dets)
@@ -512,25 +531,6 @@ class RiskEngine:
                 "track_id": None, "riesgo": "CONTEXTO", "ref": "",
             })
         confirmed, preliminary = self.apply_thresholds(dets)
-
-        # --- 7. teléfono junto a la cabeza => distracción (RQF02 3) -------
-        phones = [o for o in obstacles if o.get("tipo") == "telefono"]
-        if phones and pose:
-            h, w = frame.shape[:2]
-            for person in pose:
-                nose_x, nose_y = person["landmarks"][0]
-                for ph in phones:
-                    cx = (ph["bbox"][0] + ph["bbox"][2]) / 2 / w
-                    cy = (ph["bbox"][1] + ph["bbox"][3]) / 2 / h
-                    dist = math.hypot(cx - nose_x, cy - nose_y)
-                    if dist < 0.14:
-                        pose_signals.append({
-                            "tipo": "distraccion",
-                            "conf": min(0.9, ph["conf"] + 0.3),
-                            "n": 3, "riesgo": "MEDIO", "ref": "RQF02 (3)",
-                            "desc": "Uso de teléfono móvil detectado junto a la cabeza.",
-                            "detalle": f"teléfono a {dist:.2f} de la nariz",
-                        })
 
         # --- 8. persistencia y alertas (RQF06, RQF07) ---------------------
         active = {(d["track_id"], d["risk_type"]) for d in dets

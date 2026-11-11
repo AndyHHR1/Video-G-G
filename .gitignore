@@ -128,6 +128,17 @@ kaggle.json
 .huggingface/
 secrets/
 
+# --- Instalador (instalar.bat / instalar.sh) ---------------------------------
+# Todo lo que instala queda dentro del proyecto y no se versiona; el arrancador
+# lo genera el instalador en cada máquina.
+.tools/
+.python/
+iniciar.bat
+iniciar.sh
+# Modelos exportados para procesador (los genera el sistema si hace falta)
+*_openvino_model/
+*.onnx
+
 # --- Archivos temporales de Office -------------------------------------------
 ~$*
 .~lock.*#

@@ -186,14 +186,13 @@ class EngineCadenceTest(unittest.TestCase):
             obstacle_every=10 ** 6, classify_every=6, max_stairs_boxes=2,
             posture=FakePosture(), coco=FakeCoco(), skeleton=None,
             skeleton_every=1, _frame_no=0, _last_people=None,
-            _last_stairs=None, _last_obstacles=[], _last_geom=None,
-            _last_landmarks=None, _last_class=None, _last_skeletons=None,
+            _last_stairs=None, _last_obstacles=[], _next_due={},
+            _last_class=None, _last_skeletons=None, signals_cfg=s.skeleton.senales,
             _fall_held={}, _errors={"gpu": 0, "pose": 0, "deteccion": 0},
             _error_prints={}, camera_connected=True)
         from backend.perception.tracking import IoUTracker
         from unittest import mock
         eng.tracker = IoUTracker()
-        eng.pose = mock.Mock(analyse=lambda f: [])
         eng.alerts = mock.MagicMock()
         eng.alerts.update.return_value = []
         frame = np.zeros((54, 96, 3), np.uint8)
@@ -202,11 +201,97 @@ class EngineCadenceTest(unittest.TestCase):
                 eng.step(frame, allow_alerts=False)
             except Exception:                          # noqa: BLE001
                 pass    # el resto del pipeline usa piezas falsas; solo se cuentan llamadas
-        # 26 fotogramas: escalera en el 1.º (no había resultado) + 13 y 26
+        # 26 fotogramas: escalera al principio + cada 13
         self.assertGreaterEqual(calls["stairs"], 2)    # la etapa sí se alcanza
         self.assertLessEqual(calls["stairs"], 3)
-        # personas: 1.º + 6, 12, 18, 24
+        # personas: al principio + cada 6
         self.assertLessEqual(calls["people"], 5)
+
+
+class SchedulerTest(unittest.TestCase):
+    """Como mucho UNA etapa pesada por fotograma y cadencias respetadas."""
+
+    def _engine(self, **periods):
+        from backend.perception.engine import RiskEngine
+        eng = RiskEngine.__new__(RiskEngine)
+        eng.__dict__.update(people_every=6, skeleton_every=2, stairs_every=13,
+                            obstacle_every=11, skeleton=object(), _next_due={})
+        eng.__dict__.update(periods)
+        return eng
+
+    def test_one_heavy_stage_per_frame(self):
+        eng = self._engine()
+        runs = {k: 0 for k in eng.STAGES}
+        for n in range(1, 601):                         # 20 s a 30 fps
+            got = eng._schedule(n)
+            self.assertLessEqual(len(got), 1)
+            for k in got:
+                runs[k] += 1
+        # cada etapa corre aproximadamente a su cadencia (algún aplazamiento)
+        self.assertGreaterEqual(runs["people"], 600 // 6 - 5)
+        self.assertGreaterEqual(runs["skeleton"], 600 // 2 * 0.8)
+        self.assertGreaterEqual(runs["stairs"], 600 // 13 - 5)
+        self.assertGreaterEqual(runs["obstacles"], 600 // 11 - 5)
+
+    def test_force_runs_everything(self):
+        eng = self._engine()
+        self.assertEqual(eng._schedule(1, force=True), set(eng.STAGES))
+
+    def test_no_skeleton_stage_when_disabled(self):
+        eng = self._engine(skeleton=None)
+        seen = set()
+        for n in range(1, 50):
+            seen |= eng._schedule(n)
+        self.assertNotIn("skeleton", seen)
+
+
+class SkeletonSignalsTest(unittest.TestCase):
+    """Pasamanos y distracción con los puntos de cada persona (sin MediaPipe)."""
+
+    @staticmethod
+    def sk(wrists, elbows=None, torso=100.0):
+        # persona de pie en píxeles: hombros y=200, caderas y=300 (torso 100)
+        k = [[0.0, 0.0, 0.9, 0] for _ in range(17)]
+        pts = {0: (500, 150), 5: (460, 200), 6: (540, 200), 11: (470, 300),
+               12: (530, 300)}
+        el = elbows or ((455, 260), (545, 260))
+        pts.update({7: el[0], 8: el[1], 9: wrists[0], 10: wrists[1]})
+        for i, (x, y) in pts.items():
+            k[i] = [x, y, 0.9, 1]
+        return {"id": 3, "kps": k, "metricas": {"torso_px": torso}}
+
+    def setUp(self):
+        from backend.config import SkeletonSignalsCfg
+        from backend.perception.skeleton.signals import skeleton_signals
+        self.cfg, self.f = SkeletonSignalsCfg(), skeleton_signals
+
+    def tipos(self, sk, **kw):
+        return {s["tipo"] for s in self.f(sk, self.cfg, **kw)}
+
+    def test_hands_down_on_stairs_is_no_handrail(self):
+        sk = self.sk(((460, 320), (540, 320)))          # brazos colgando
+        self.assertIn("sin_pasamanos", self.tipos(sk, stairs_present=True))
+        self.assertNotIn("sin_pasamanos", self.tipos(sk, stairs_present=False))
+
+    def test_hand_out_at_waist_holds_handrail(self):
+        sk = self.sk(((380, 290), (540, 320)))          # mano izq. a la barandilla
+        self.assertNotIn("sin_pasamanos", self.tipos(sk, stairs_present=True))
+
+    def test_hand_at_face_is_distraction(self):
+        sk = self.sk(((505, 165), (540, 320)), elbows=((470, 230), (545, 260)))
+        self.assertIn("distraccion", self.tipos(sk))
+
+    def test_phone_near_face_is_distraction(self):
+        sk = self.sk(((460, 320), (540, 320)))
+        phone = {"bbox": [490, 150, 520, 190], "conf": 0.5}
+        sigs = self.f(sk, self.cfg, phones=[phone])
+        self.assertEqual([s["tipo"] for s in sigs], ["distraccion"])
+        self.assertIn("teléfono", sigs[0]["detalle"])
+
+    def test_hidden_wrists_do_not_signal_handrail(self):
+        sk = self.sk(((460, 320), (540, 320)))
+        sk["kps"][9][3] = sk["kps"][10][3] = 0          # muñecas tapadas
+        self.assertNotIn("sin_pasamanos", self.tipos(sk, stairs_present=True))
 
 
 class ObstacleRiskTest(unittest.TestCase):

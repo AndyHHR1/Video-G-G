@@ -20,6 +20,18 @@ import numpy as np
 from .catalog import OBSTACLE_CLASSES, OBSTACLE_RISK, PHONE_CLASSES
 
 
+def _load(weights: str, device, imgsz: int, dynamic: bool = False):
+    """YOLO en `device`; en CPU, la versión OpenVINO si está disponible
+    (ver accel.py). Devuelve (modelo, acelerado)."""
+    from ultralytics import YOLO
+    from .accel import cpu_weights
+    path = cpu_weights(weights, device, imgsz, dynamic=dynamic)
+    model = YOLO(path)
+    if path.endswith(".pt"):
+        model.to(device)                 # los exportados no admiten .to()
+    return model, not path.endswith(".pt")
+
+
 def _names(model) -> dict[int, str]:
     raw = model.names
     return dict(enumerate(raw)) if isinstance(raw, list) else \
@@ -31,10 +43,10 @@ class CocoDetector:
 
     def __init__(self, weights: str, device, obstacle_conf: float = 0.25,
                  person_conf: float = 0.20, person_imgsz: int = 512):
-        from ultralytics import YOLO
         self.device = device
-        self.model = YOLO(weights)
-        self.model.to(device)
+        self.model, accel = _load(weights, device, person_imgsz)
+        # modelo OpenVINO de tamaño fijo: los objetos también a person_imgsz
+        self.obstacle_imgsz = person_imgsz if accel else None
         self.names = _names(self.model)
         self.obstacle_conf = obstacle_conf
         self.person_conf = person_conf
@@ -61,8 +73,9 @@ class CocoDetector:
 
     def obstacles(self, frame: np.ndarray) -> list[dict]:
         """Objetos sobre la escalera: obstáculo (ALTO), teléfono o mobiliario."""
+        extra = {"imgsz": self.obstacle_imgsz} if self.obstacle_imgsz else {}
         res = self.model.predict(frame, conf=self.obstacle_conf, iou=0.5,
-                                 device=self.device, verbose=False)[0]
+                                 device=self.device, verbose=False, **extra)[0]
         out = []
         if res.boxes is None:
             return out
@@ -113,12 +126,11 @@ class PostureDetector:
     MIN_POSTURE_CONF = 0.40   # por debajo, la postura se da como no decidida
 
     def __init__(self, stairs_weights: str, posture_weights: str, device):
-        from ultralytics import YOLO
         self.device = device
-        self.model = YOLO(stairs_weights)          # detector de escalera
-        self.model.to(device)
-        self.cls = YOLO(posture_weights)           # clasificador de postura
-        self.cls.to(device)
+        # detector de escalera y clasificador de postura (OpenVINO en CPU)
+        self.model, _ = _load(stairs_weights, device, self.STAIRS_IMGSZ)
+        # lote variable: classify_many() pasa todas las personas a la vez
+        self.cls, _ = _load(posture_weights, device, self.POSTURE_IMGSZ, dynamic=True)
         stairs_names = set(_names(self.model).values())
         if "escalera" not in stairs_names:
             raise ValueError(f"{stairs_weights}: no tiene la clase 'escalera' "
