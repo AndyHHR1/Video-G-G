@@ -64,7 +64,8 @@ class RiskEngine:
 
         # --- componentes -------------------------------------------------
         from . import accel
-        accel.configure(getattr(s.hardware, "openvino_cpu", True))
+        accel.configure(getattr(s.hardware, "openvino_cpu", True),
+                        getattr(s.hardware, "openvino_int8_coco", True))
         self.posture = PostureDetector(str(s.detector_path),
                                        str(s.posture_path), self.device)
         self.coco = CocoDetector(str(s.coco_path), self.device,
@@ -76,6 +77,10 @@ class RiskEngine:
         # señales salen del esqueleto de cada persona (skeleton/signals.py).
         # (MediaPipe Face sigue anonimizando las evidencias.)
         self.signals_cfg = s.skeleton.senales
+        # Zona de escalera y pasamanos dibujada en el panel (perception/zone.py)
+        from .zone import Zone
+        self.zone_path = s.path("configs/zona_local.json")
+        self.zone = Zone.load(self.zone_path)
         self.skeleton = None
         self.skeleton_every = max(1, s.skeleton.every)
         if s.skeleton.enabled and enable_pose:
@@ -160,16 +165,26 @@ class RiskEngine:
         self._next_due[k] = n + max(1, periods[k])
         return {k}
 
+    def set_zone(self, zone) -> None:
+        """Nueva zona desde el panel (cambio de referencia: seguro entre hilos)."""
+        self.zone = zone
+
     # ------------------------------------------------------------------ #
     # Señales por esqueleto -> caja de su persona
     # ------------------------------------------------------------------ #
     def _skeleton_signals(self, skeletons: list, dets: list, phones: list,
-                          stairs_present: bool) -> list[dict]:
+                          stairs_present: bool, w: int = 0, h: int = 0) -> list[dict]:
         from .skeleton.signals import skeleton_signals
         out: list[dict] = []
         people = [d for d in dets if d.get("class_id") != 3]
+        zone = getattr(self, "zone", None)
+        rails = zone.rail_segments(w, h) if zone is not None and w else []
         for sk in skeletons:
-            sigs = skeleton_signals(sk, self.signals_cfg, phones, stairs_present)
+            # con zona dibujada, solo cuentan las personas en la escalera
+            if zone is not None and w and not zone.foot_inside(sk["bbox"], w, h):
+                continue
+            sigs = skeleton_signals(sk, self.signals_cfg, phones, stairs_present,
+                                    rails=rails)
             if not sigs:
                 continue
             sigs = [{**s_, **RISK_CATALOG[s_["tipo"]]} for s_ in sigs]
@@ -513,9 +528,19 @@ class RiskEngine:
         # --- 5b. señales por esqueleto (pasamanos, distracción) ------------
         # Cada señal va a la caja de SU persona (la que más solapa con su
         # esqueleto), que toma el mayor riesgo entre su clase y sus señales.
+        H, W = frame.shape[:2]
+        zone = self.zone
+        if zone.has_stairs:
+            # objetos: solo es obstáculo lo que está DENTRO de la escalera
+            obstacles = [o if o.get("tipo") != "obstaculo_escalon"
+                         or zone.foot_inside(o["bbox"], W, H)
+                         else {**o, "tipo": "elemento_escena", "riesgo": "CONTEXTO",
+                               "fuera_zona": True}
+                         for o in obstacles]
         phones = [o for o in obstacles if o.get("tipo") == "telefono"]
-        pose_signals = self._skeleton_signals(skeletons, dets, phones,
-                                              stairs_present=bool(stairs))
+        pose_signals = self._skeleton_signals(
+            skeletons, dets, phones,
+            stairs_present=bool(stairs) or zone.has_stairs, w=W, h=H)
 
         # --- 6. seguimiento + confirmación de caídas ----------------------
         self.tracker.update(dets)
@@ -524,6 +549,16 @@ class RiskEngine:
         self._link_posture(skeletons, dets, pose_signals)
         self._confirm_falls(dets)
         self._link_balance(skeletons, dets, pose_signals)
+        if zone.has_stairs:
+            # Personas fuera de la escalera dibujada: se ven, pero no generan
+            # riesgos ni alertas (gente que pasa por detrás, otra sala...).
+            for d in dets:
+                if d.get("class_id") == 3 or zone.foot_inside(d["bbox"], W, H):
+                    continue
+                d.pop("risk_type", None)
+                d.pop("_fall_pending", None)
+                d.update(riesgo="NEUTRO", ref="fuera de la escalera",
+                         fuera_zona=True)
         for conf_s, box in stairs:
             dets.append({
                 "class_id": 3, "class_name": "escalera",

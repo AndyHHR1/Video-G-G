@@ -22,7 +22,7 @@ import os
 
 from flask import Flask
 
-from .api import alerts, analysis, auth, system
+from .api import alerts, analysis, auth, system, zone
 from .api.context import Runtime
 from .config import ROOT, Settings
 from .hardware import apply_profile
@@ -72,7 +72,7 @@ def create_app(settings: Settings, lifecycle: Lifecycle | None = None) -> Flask:
                  lifecycle=lifecycle)
     app.extensions["escaleras"] = rt
 
-    for bp in (auth.bp, system.bp, analysis.bp, alerts.bp):
+    for bp in (auth.bp, system.bp, analysis.bp, alerts.bp, zone.bp):
         app.register_blueprint(bp)
 
     _load_modules(app, settings, rt)

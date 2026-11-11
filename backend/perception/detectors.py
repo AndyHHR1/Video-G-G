@@ -20,12 +20,13 @@ import numpy as np
 from .catalog import OBSTACLE_CLASSES, OBSTACLE_RISK, PHONE_CLASSES
 
 
-def _load(weights: str, device, imgsz: int, dynamic: bool = False):
+def _load(weights: str, device, imgsz: int, dynamic: bool = False,
+          int8: bool = False):
     """YOLO en `device`; en CPU, la versión OpenVINO si está disponible
     (ver accel.py). Devuelve (modelo, acelerado)."""
     from ultralytics import YOLO
     from .accel import cpu_weights
-    path = cpu_weights(weights, device, imgsz, dynamic=dynamic)
+    path = cpu_weights(weights, device, imgsz, dynamic=dynamic, int8=int8)
     model = YOLO(path)
     if path.endswith(".pt"):
         model.to(device)                 # los exportados no admiten .to()
@@ -44,7 +45,10 @@ class CocoDetector:
     def __init__(self, weights: str, device, obstacle_conf: float = 0.25,
                  person_conf: float = 0.20, person_imgsz: int = 512):
         self.device = device
-        self.model, accel = _load(weights, device, person_imgsz)
+        from . import accel as _accel
+        # en CPU: INT8 (medido: casi 2x más rápido, persona igual de precisa)
+        self.model, accel = _load(weights, device, person_imgsz,
+                                  int8=_accel.INT8_COCO)
         # modelo OpenVINO de tamaño fijo: los objetos también a person_imgsz
         self.obstacle_imgsz = person_imgsz if accel else None
         self.names = _names(self.model)

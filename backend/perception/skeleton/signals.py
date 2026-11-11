@@ -43,9 +43,11 @@ def _dist(a, b) -> float:
 
 
 def skeleton_signals(sk: dict, cfg, phones: list[dict] = (),
-                     stairs_present: bool = False) -> list[dict]:
+                     stairs_present: bool = False,
+                     rails: list[tuple] = ()) -> list[dict]:
     """Señales de una persona. `sk`: esqueleto del SkeletonAnalyzer con `kps`
-    en píxeles y `metricas.torso_px`; `phones`: teléfonos COCO (bbox en px)."""
+    en píxeles y `metricas.torso_px`; `phones`: teléfonos COCO (bbox en px);
+    `rails`: segmentos del pasamanos dibujado en el panel (px), si los hay."""
     kps = sk.get("kps") or []
     torso = (sk.get("metricas") or {}).get("torso_px")
     if len(kps) < 17 or not torso:
@@ -80,7 +82,19 @@ def skeleton_signals(sk: dict, cfg, phones: list[dict] = (),
                 break
 
     # --- RQF02 (2): no usa el pasamanos (solo con escalera en la escena) ----
-    if stairs_present and wrists and hip and sh:
+    if rails and wrists:
+        # Pasamanos dibujado en el panel: una mano a menos de
+        # `rail_touch_torso` torsos de la línea real cuenta como agarrada.
+        from ..zone import point_segment_distance
+        near = min(point_segment_distance(w, a, b)
+                   for w in wrists for a, b in rails) / torso
+        if near > cfg.rail_touch_torso:
+            out.append({"tipo": "sin_pasamanos", "conf": 0.7,
+                        "detalle": f"persona {sk.get('id')}: mano a {near:.1f} "
+                                   "torsos del pasamanos"})
+    elif stairs_present and wrists and hip and sh:
+        # Sin pasamanos dibujado: aproximación (mano separada del cuerpo a la
+        # altura de la cintura/pecho, donde suele estar la barandilla).
         top = sh[1] - cfg.rail_above_shoulder_torso * torso
         bottom = hip[1] + cfg.rail_below_hip_torso * torso
         holding = any(top <= w[1] <= bottom

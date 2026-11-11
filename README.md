@@ -220,6 +220,9 @@ PANEL_TOKEN="un-secreto-largo" scripts/run.sh --host 0.0.0.0
 **Pestañas del panel:**
 
 - **Cámara en vivo:** webcam del navegador. La casilla **«Mejora de calidad (Real-ESRGAN x4)»** activa la mejora en tiempo real (~29 fps). Sus alertas incluyen también las acústicas (marcadas «audio»).
+  - **Cuadros y esqueletos intermitentes:** aparecen ~3 s cuando entra alguien y 1.5 s cada 8 s; los riesgos (naranja/rojo) se ven siempre. Casilla **«Mostrar siempre cuadros y esqueletos»** para fijarlos.
+  - **«Sonido de alertas»:** tres pitidos agudos si llega una alerta crítica, uno grave si es de precaución (solo en ese navegador; se activa con el primer clic en la página).
+  - **«Configurar zona»:** con la cámara conectada, marca con clics el **contorno de la escalera** y la(s) **línea(s) del pasamanos** y pulsa «Guardar zona». Desde entonces, las personas fuera de la escalera no generan riesgos ni alertas, solo cuentan como obstáculo los objetos dentro de ella y «sin pasamanos» se mide con la línea real (mano a menos de medio torso). Se guarda en `configs/zona_local.json` (propia de cada instalación); «Borrar todo» + «Guardar zona» vuelve a analizar toda la imagen.
 - **🎙 Audio** (módulo `modulos/audio`): micrófono en vivo con vúmetro y métricas (pisadas/s, factor de cresta, F0, pico RMS), sensibilidad alta/media/baja, pitido y notificaciones, demostración con la sesión simulada de `final.py` y análisis de un archivo **de audio**. Puede funcionar a la vez que la cámara.
 - **🖼 Imagen** (módulo `modulos/imagen`): fotografía o cámara; calidad óptica, preprocesamiento (adaptativo / original / CLAHE / gamma), personas y celulares (YOLO11n), articulaciones (YOLO11n-Pose) y el JSON completo. «Características del vídeo en vivo» lee el último fotograma del vídeo sin alterarlo.
 - **Clases:** leyenda de clases y su relación con los requisitos.
@@ -791,9 +794,18 @@ Video-G-G/
 
 ```bash
 pip install -r requirements/dev.txt     # pytest
-python -m pytest                        # vídeo + esqueletos + módulos (74 pruebas)
+python -m pytest                        # vídeo + esqueletos + zona + módulos (107 pruebas)
 node --test modulos/audio/tests/audio-worklet.test.cjs   # worklet de audio (5)
 ```
+
+**Pruebas automáticas en GitHub** (`.github/workflows/tests.yml`): en cada
+push a `expo` / `modelo-v5` / `main` y en cada pull request, GitHub instala el
+entorno (CPU), comprueba los paquetes con la lógica del instalador, descarga y
+verifica los modelos y ejecuta todas las pruebas, incluida la de humo con los
+modelos reales. El resultado aparece en el propio PR.
+
+- `tests/test_posture_rules.py`: seguro de postura por reglas del esqueleto y su fusión con el modelo.
+- `tests/test_zone.py`: zona de escalera/pasamanos (validación, geometría, pasamanos real).
 
 - `tests/test_units.py`: configuración, tracker, geometría de pose, persistencia, alertas, **perfil GTX 1650** y **parada ordenada** (sin GPU).
 - `tests/test_skeleton.py`: esqueletos sin GPU (estimador falso): filtro de confianza y oclusión, One Euro, saltos imposibles, ángulo del tronco, nadir, centro de masa con tobillos tapados, persona de pie, bajar deprisa (sin alerta), caída (una alerta), pasamanos tapando piernas, dos personas independientes, un solo criterio no alerta, fusión de la persona partida por el pasamanos.

@@ -135,6 +135,9 @@ secrets/
 .python/
 iniciar.bat
 iniciar.sh
+# Zona de escalera/pasamanos dibujada en el panel: propia de cada instalación
+configs/zona_local.json
+configs/zona_local.tmp
 # Modelos exportados para procesador (los genera el sistema si hace falta)
 *_openvino_model/
 *.onnx

@@ -188,6 +188,7 @@ class EngineCadenceTest(unittest.TestCase):
             skeleton_every=1, _frame_no=0, _last_people=None,
             _last_stairs=None, _last_obstacles=[], _next_due={},
             _last_class=None, _last_skeletons=None, signals_cfg=s.skeleton.senales,
+            zone=__import__("backend.perception.zone", fromlist=["Zone"]).Zone(),
             _fall_held={}, _errors={"gpu": 0, "pose": 0, "deteccion": 0},
             _error_prints={}, camera_connected=True)
         from backend.perception.tracking import IoUTracker

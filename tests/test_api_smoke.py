@@ -113,6 +113,33 @@ class ApiSmokeTest(unittest.TestCase):
         self.assertEqual(self.client.get("/api/alerts").status_code, 200)
         self.assertEqual(self.client.delete("/api/alertas").status_code, 200)
 
+    def test_zone_api(self):
+        import time
+        from backend.perception.zone import Zone
+        rt = self.app.extensions["escaleras"]
+        for _ in range(200):                      # el motor se crea en su hilo
+            if getattr(rt.inferencer, "engine", None) is not None:
+                break
+            time.sleep(0.05)
+        eng = rt.inferencer.engine
+        # archivo temporal: la prueba nunca toca configs/zona_local.json real
+        eng.zone_path = Path(self.tmp.name) / "zona.json"
+        eng.set_zone(Zone())
+        zona = {"escalera": [[0.3, 0.2], [0.7, 0.2], [0.8, 0.9], [0.2, 0.9]],
+                "pasamanos": [[[0.25, 0.3], [0.25, 0.85]]]}
+        r = self.client.post("/api/zona", json=zona)
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(eng.zone.has_stairs and eng.zone.has_rails)
+        self.assertTrue(eng.zone_path.is_file())
+        self.assertEqual(self.client.get("/api/zona").get_json()["escalera"],
+                         zona["escalera"])
+        bad = self.client.post("/api/zona", json={"escalera": [[0, 0], [5, 5], [1, 1]]})
+        self.assertEqual(bad.status_code, 400)
+        self.assertTrue(eng.zone.has_stairs)      # una zona mala no pisa la buena
+        self.assertEqual(self.client.delete("/api/zona").status_code, 200)
+        self.assertFalse(eng.zone.has_stairs)
+        self.assertFalse(eng.zone_path.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -179,6 +179,8 @@ class SkeletonSignalsCfg:
     rail_lateral_torso: float = 0.5    # mano separada del cuerpo hacia la barandilla
     rail_above_shoulder_torso: float = 0.2
     rail_below_hip_torso: float = 0.6
+    # con el pasamanos DIBUJADO en el panel: mano a esta distancia o menos
+    rail_touch_torso: float = 0.45
 
 
 @dataclass
@@ -227,6 +229,8 @@ class HardwareCfg:
     cpu: dict = field(default_factory=_cpu_default)   # auto: sin GPU -> cpu
     # En CPU, exportar y usar los modelos en OpenVINO (perception/accel.py)
     openvino_cpu: bool = True
+    # En CPU, el COCO que localiza personas/objetos en INT8 (~2x más rápido)
+    openvino_int8_coco: bool = True
     # Rellenados en el arranque por backend.hardware.apply_profile
     active: str = "normal"
     gpu: dict = field(default_factory=dict)
