@@ -38,7 +38,8 @@ class ModelsCfg:
 
 @dataclass
 class InferenceCfg:
-    conf: float = 0.25
+    # Sensibilidad: confianza mínima de PERSONA (barra del panel, ver engine.conf)
+    conf: float = 0.20
     imgsz: int = 640
 
 
@@ -49,7 +50,7 @@ class EngineCfg:
     stairs_every: int = 13
     obstacle_every: int = 11
     classify_every: int = 6
-    person_conf: float = 0.20
+    person_conf: float = 0.20    # obsoleto: la controla inference.conf
     person_imgsz: int = 512
     max_stairs_boxes: int = 2
 

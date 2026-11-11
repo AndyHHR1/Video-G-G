@@ -31,7 +31,10 @@ models:
   sr_dir: models/sr
 
 inference:
-  conf: 0.25          # umbral por defecto del detector (la interfaz lo ajusta)
+  # Sensibilidad = confianza mínima para aceptar que algo es una PERSONA
+  # (detector COCO). Valor inicial de la barra «Sensibilidad» del panel, que
+  # la cambia en vivo. Más bajo = más sensible; más alto = más estricto.
+  conf: 0.20
   imgsz: 640
 
 # Cadencias del motor: cada cuántos fotogramas se ejecuta cada etapa en vídeo
@@ -46,7 +49,8 @@ engine:
   # refrescan las cajas de personas y entre medias la caché (por solape) acierta
   # siempre. Medido con 7 (desalineado): 12.6 ms/frame frente a 7.6 ms.
   classify_every: 6
-  person_conf: 0.20
+  # person_conf ya no se usa: la confianza de persona es inference.conf
+  # (barra «Sensibilidad» del panel).
   person_imgsz: 512
   max_stairs_boxes: 2
 

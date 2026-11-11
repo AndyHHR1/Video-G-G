@@ -204,7 +204,7 @@ scripts/run.sh                       # equivalente a: python -m backend
 | `--profile baja_vram` | Forzar el perfil de GTX 1650 (`auto` lo elige solo) |
 | `--no-audio` / `--no-imagen` | Arrancar sin uno de los módulos aparte |
 | `--stop` | Detener un servidor que ya está corriendo y salir |
-| `--conf 0.3` | Umbral por defecto del detector |
+| `--conf 0.3` | Sensibilidad inicial (confianza mínima de persona; ver «Sensibilidad» abajo) |
 | `--set clave.sub=valor` | Cambiar cualquier valor de `configs/app.yaml` sin editarlo |
 | `--config otro.yaml` | Usar otra configuración (por ejemplo, otra escalera) |
 
@@ -222,6 +222,30 @@ PANEL_TOKEN="un-secreto-largo" scripts/run.sh --host 0.0.0.0
 - **Cámara en vivo:** webcam del navegador. La casilla **«Mejora de calidad (Real-ESRGAN x4)»** activa la mejora en tiempo real (~29 fps). Sus alertas incluyen también las acústicas (marcadas «audio»).
   - **Cuadros y esqueletos intermitentes:** aparecen ~3 s cuando entra alguien y 1.5 s cada 8 s; los riesgos (naranja/rojo) se ven siempre. Casilla **«Mostrar siempre cuadros y esqueletos»** para fijarlos.
   - **«Sonido de alertas»:** tres pitidos agudos si llega una alerta crítica, uno grave si es de precaución (solo en ese navegador; se activa con el primer clic en la página).
+  - **«Sensibilidad»** (barra, por defecto 0.20): ver la sección siguiente. Debajo de la barra el panel explica en una línea qué hace el valor elegido y qué se sacrifica.
+
+**Sensibilidad: qué es y cómo funciona.** Es la **confianza mínima para
+aceptar que algo es una persona**. El detector COCO da a cada posible persona
+una puntuación de 0 a 1; solo las que superan la sensibilidad pasan al resto
+del sistema (postura, esqueleto, seguimiento y alertas). Se cambia en vivo
+desde el panel (se envía con cada fotograma como `conf`) y el valor inicial es
+`inference.conf` en `configs/app.yaml`. Solo afecta a las **personas**: los
+objetos, la escalera y la postura tienen sus propios umbrales fijos.
+
+| Valor | Qué hace | Qué se sacrifica |
+|---|---|---|
+| **0.05 – 0.10** · muy sensible | Detecta personas lejanas, pequeñas o tapadas por el pasamanos | Más detecciones falsas (sombras, abrigos colgados, objetos) y algo más de trabajo para el equipo: cada «persona» se clasifica y se sigue |
+| **0.15 – 0.25** · equilibrado (recomendado, 0.20) | Buen balance entre no perder personas y no inventarlas | Alguna persona muy lejana o muy tapada puede no detectarse |
+| **0.30 – 0.40** · estricto | Solo personas claras: menos detecciones falsas | Puede no ver a personas lejanas, de espaldas o tapadas, y por tanto no analizar su postura |
+| **0.45 – 0.60** · muy estricto | Solo personas claras y cercanas | Puede perder caídas de personas lejanas o tapadas: no recomendado para vigilancia |
+
+Medido en vivo con una escena de calle de ~16 personas (MOT15): a **0.05**
+salen ~17 por fotograma pero con picos de 28 (detecciones falsas); a
+**0.20**, ~16 estables; a **0.60**, ~8 (se pierde la mitad de la gente).
+
+Una persona que no se detecta no tiene postura, esqueleto asociado ni
+alertas; por eso, ante la duda, es mejor quedarse en el rango equilibrado y
+usar la **zona dibujada** para descartar a la gente que no está en la escalera.
   - **«Configurar zona»:** con la cámara conectada, marca con clics el **contorno de la escalera** y la(s) **línea(s) del pasamanos** y pulsa «Guardar zona». Desde entonces, las personas fuera de la escalera no generan riesgos ni alertas, solo cuentan como obstáculo los objetos dentro de ella y «sin pasamanos» se mide con la línea real (mano a menos de medio torso). Se guarda en `configs/zona_local.json` (propia de cada instalación); «Borrar todo» + «Guardar zona» vuelve a analizar toda la imagen.
 - **🎙 Audio** (módulo `modulos/audio`): micrófono en vivo con vúmetro y métricas (pisadas/s, factor de cresta, F0, pico RMS), sensibilidad alta/media/baja, pitido y notificaciones, demostración con la sesión simulada de `final.py` y análisis de un archivo **de audio**. Puede funcionar a la vez que la cámara.
 - **🖼 Imagen** (módulo `modulos/imagen`): fotografía o cámara; calidad óptica, preprocesamiento (adaptativo / original / CLAHE / gamma), personas y celulares (YOLO11n), articulaciones (YOLO11n-Pose) y el JSON completo. «Características del vídeo en vivo» lee el último fotograma del vídeo sin alterarlo.

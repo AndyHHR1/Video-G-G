@@ -295,6 +295,26 @@ class SkeletonSignalsTest(unittest.TestCase):
         self.assertNotIn("sin_pasamanos", self.tipos(sk, stairs_present=True))
 
 
+class SensitivityTest(unittest.TestCase):
+    """La barra «Sensibilidad» (engine.conf) llega al detector de personas."""
+
+    def test_conf_updates_person_threshold_and_clamps(self):
+        from types import SimpleNamespace
+        from backend.perception.engine import RiskEngine
+        eng = RiskEngine.__new__(RiskEngine)
+        eng.coco = SimpleNamespace(person_conf=0.20)
+        eng.conf = 0.35
+        self.assertEqual(eng.coco.person_conf, 0.35)
+        self.assertEqual(eng.conf, 0.35)
+        eng.conf = 5            # fuera de rango -> se limita
+        self.assertEqual(eng.coco.person_conf, 0.95)
+        eng.conf = -1
+        self.assertEqual(eng.coco.person_conf, 0.05)
+
+    def test_default_sensitivity_matches_panel(self):
+        self.assertEqual(load_settings().inference.conf, 0.20)
+
+
 class ObstacleRiskTest(unittest.TestCase):
     """Un objeto en la escalera es riesgo MEDIO (naranja), nunca ALTO (rojo)."""
 

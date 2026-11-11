@@ -50,6 +50,9 @@
   .stage canvas.live { max-width:100%; height:auto; }
   .stage canvas.zone-ov { position:absolute; pointer-events:none; max-height:none; border-radius:4px; }
   .stage canvas.zone-ov.editing { pointer-events:auto; cursor:crosshair; }
+  .sens-hint { font-size:12px; color:var(--muted); margin:-6px 0 12px; line-height:1.45; }
+  .sens-hint b { color:var(--text); font-weight:600; }
+  .sens-hint .cost { color:#f2a83c; }
   .zonebar { background:#141821; border:1px solid var(--line); border-radius:8px; padding:8px 12px; }
   .zonebar b { color:#c878c8; font-size:13px; }
   .placeholder { color:#39404f; font-size:13px; padding:60px 20px; text-align:center; }
@@ -149,8 +152,9 @@
         <div class="ctrl">
           <button id="bcam">Conectar webcam</button>
           <button id="bstop" class="ghost" disabled>Detener</button>
-          <label>Umbral <input type="range" id="ccam" min="0.05" max="0.90" step="0.05" value="0.25">
-            <b id="cvcam">0.25</b></label>
+          <label title="Confianza mínima para aceptar que algo es una persona. Más a la izquierda = más sensible; más a la derecha = más estricto.">Sensibilidad
+            <input type="range" id="ccam" min="0.05" max="0.60" step="0.05" value="0.20">
+            <b id="cvcam">0.20</b></label>
           <label>Enviar cada
             <select id="rate" class="sel">
               <option value="100">10 fps</option>
@@ -171,6 +175,7 @@
           </label>
           <button class="ghost" id="bzone" title="Marca sobre la imagen dónde está la escalera y el pasamanos. Las personas fuera de la escalera no generan alertas, solo cuentan los objetos dentro de ella y el pasamanos se comprueba con la línea real.">Configurar zona</button>
          </div>
+        <div class="sens-hint" id="sensHint"></div>
         <div class="ctrl zonebar" id="zoneBar" style="display:none">
           <b>Zona:</b>
           <label><input type="radio" name="ztool" value="escalera" checked> Escalera (contorno)</label>
@@ -289,7 +294,32 @@ if (_camAudioLink) _camAudioLink.onclick = e => {
 };
 
 // deslizador
-$('#ccam').oninput = e => $('#cvcam').textContent = (+e.target.value).toFixed(2);
+// Barra «Sensibilidad»: confianza mínima para aceptar que algo es una
+// persona (detector COCO del servidor). Se explica en vivo qué hace cada
+// rango y qué se sacrifica.
+function sensText(v) {
+  if (v <= 0.10) return ['Muy sensible',
+    'detecta personas lejanas, pequeñas o tapadas por el pasamanos.',
+    'más detecciones falsas (sombras, abrigos colgados, objetos) y algo más de trabajo para el equipo.'];
+  if (v <= 0.25) return ['Equilibrado (recomendado)',
+    'buen balance entre no perder personas y no inventarlas.',
+    'alguna persona muy lejana o muy tapada puede no detectarse.'];
+  if (v <= 0.40) return ['Estricto',
+    'solo acepta personas con bastante claridad: menos detecciones falsas.',
+    'puede no ver a personas lejanas, de espaldas o tapadas por el pasamanos, y por tanto no analizar su postura.'];
+  return ['Muy estricto',
+    'solo personas claras y cercanas a la cámara.',
+    'puede perder caídas de personas lejanas o tapadas: no recomendado para vigilancia.'];
+}
+function updateSens() {
+  const v = +$('#ccam').value;
+  $('#cvcam').textContent = v.toFixed(2);
+  const [name, does, cost] = sensText(v);
+  $('#sensHint').innerHTML = `<b>Sensibilidad ${v.toFixed(2)} · ${name}:</b> ${does} ` +
+    `<span class="cost">Se sacrifica: ${cost}</span>`;
+}
+$('#ccam').oninput = updateSens;
+updateSens();
 
 // salud y estado de los módulos
 fetch('/api/health').then(r=>r.json()).then(d => {
@@ -600,15 +630,10 @@ function drawBoxes(src, dst, d) {
     const col = RISK_COLOR[b.risk] || '#dcdcdc';
     const x1 = b.bbox[0]*dst.width, y1 = b.bbox[1]*dst.height;
     const x2 = b.bbox[2]*dst.width, y2 = b.bbox[3]*dst.height;
+    // Solo el recuadro con el color de su riesgo: sin etiqueta de texto
+    // (el detalle de cada persona y objeto está en el panel lateral).
     c.strokeStyle = col; c.lineWidth = 2;
     c.strokeRect(x1, y1, x2-x1, y2-y1);
-    const t = `${b.class_name}`;
-    c.font = '13px system-ui,sans-serif';
-    const tw = c.measureText(t).width;
-    c.fillStyle = col;
-    c.fillRect(x1, Math.max(0,y1-16), tw+8, 16);
-    c.fillStyle = '#141414';
-    c.fillText(t, x1+4, Math.max(12,y1-4));
   }
   c.globalAlpha = 1;
   drawSkeletons(c, dst, d.esqueletos || [], alpha);
@@ -846,7 +871,7 @@ $('#bcam').onclick = async () => {
       `cámara ${v.videoWidth}×${v.videoHeight} → envío ${small.width}×${small.height} · ` +
       `${cam.sent} frames · ${cam.fps.toFixed(1)} fps · ` +
       `${$('#fast').checked ? 'mejora Real-ESRGAN x4 activa' : 'sin mejora de calidad'} · ` +
-      `umbral ${$('#ccam').value}` +
+      `sensibilidad ${$('#ccam').value}` +
       (cam.err ? ` · <b style="color:#e03c3c">${cam.err}</b>` : '');
   };
 

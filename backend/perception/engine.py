@@ -68,9 +68,11 @@ class RiskEngine:
                         getattr(s.hardware, "openvino_int8_coco", True))
         self.posture = PostureDetector(str(s.detector_path),
                                        str(s.posture_path), self.device)
+        # La confianza de PERSONA la controla la barra «Sensibilidad» del panel
+        # (self.conf); arranca con inference.conf de configs/app.yaml.
         self.coco = CocoDetector(str(s.coco_path), self.device,
                                  obstacle_conf=th.obstacle,
-                                 person_conf=e.person_conf,
+                                 person_conf=self.conf,
                                  person_imgsz=e.person_imgsz)
         # MediaPipe Pose ya no se usa en el motor: describía UNA persona y
         # emparejaba su pose con la caja equivocada en escenas con gente. Las
@@ -125,6 +127,24 @@ class RiskEngine:
         self.camera_connected = False
 
     # ------------------------------------------------------------------ #
+    # Sensibilidad (barra «Sensibilidad» del panel = parámetro `conf`)
+    # ------------------------------------------------------------------ #
+    @property
+    def conf(self) -> float:
+        return self._conf
+
+    @conf.setter
+    def conf(self, value) -> None:
+        """Confianza mínima para aceptar que algo es una PERSONA (detector
+        COCO). Más baja = más sensible (personas lejanas o tapadas, algo más
+        de falsas detecciones); más alta = más estricta. Antes este valor se
+        guardaba pero ninguna etapa lo usaba."""
+        v = min(0.95, max(0.05, float(value)))
+        self._conf = v
+        coco = self.__dict__.get("coco")
+        if coco is not None:
+            coco.person_conf = v
+
     @property
     def names(self) -> dict[int, str]:
         return self.posture.names
