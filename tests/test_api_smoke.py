@@ -80,7 +80,11 @@ class ApiSmokeTest(unittest.TestCase):
         jpg = cv2.imencode(".jpg", cv2.resize(img, (960, 540)))[1].tobytes()
         d = None
         import time
-        for fid in range(1, 80):                 # asíncrono: los primeros pueden ir vacíos
+        # asíncrono: los primeros pueden ir vacíos. Hasta ~10 s: con la GPU
+        # compartida (p. ej. el panel abierto a la vez) ByteTrack tardaba más
+        # de 4 s en confirmar la identidad del esqueleto y la prueba fallaba de
+        # forma intermitente. Sale en cuanto está listo.
+        for fid in range(1, 200):
             d = self.client.post(f"/api/frame?overlay=0&sr=1&fid={fid}", data=jpg,
                                  content_type="image/jpeg").get_json()
             # Esperar también a un esqueleto con identidad: ByteTrack necesita
