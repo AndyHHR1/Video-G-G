@@ -51,7 +51,8 @@ class ApiSmokeTest(unittest.TestCase):
 
     def test_health_reports_profile_and_modules(self):
         d = self.client.get("/api/health").get_json()
-        self.assertIn(d["hardware"]["perfil"], ("normal", "baja_vram"))
+        # "cpu" en máquinas sin GPU (p. ej. las pruebas automáticas de GitHub)
+        self.assertIn(d["hardware"]["perfil"], ("normal", "baja_vram", "cpu"))
         self.assertTrue(d["modulos"]["audio"]["ok"], d["modulos"]["audio"])
         self.assertTrue(d["modulos"]["imagen"]["ok"], d["modulos"]["imagen"])
 
