@@ -66,7 +66,8 @@ RISK_COLOR = {
 # --------------------------------------------------------------------------- #
 RISK_CATALOG: dict[str, dict] = {
     "obstaculo_escalon": {
-        "n": 1, "riesgo": "ALTO", "ref": "RQF02 (1)",
+        # MEDIO: riesgo a vigilar; ALTO queda para caídas y desequilibrio.
+        "n": 1, "riesgo": "MEDIO", "ref": "RQF02 (1)",
         "desc": "Objeto u obstáculo abandonado en los escalones.",
     },
     "sin_pasamanos": {
@@ -123,7 +124,7 @@ SAFE_CLASSES = {"persona_erguida"}
 # --------------------------------------------------------------------------- #
 # Objetos COCO relevantes en la escalera (RQF02 1)
 # --------------------------------------------------------------------------- #
-# Obstáculo real sobre el escalón -> riesgo ALTO.
+# Obstáculo real sobre el escalón -> riesgo MEDIO (a vigilar, no emergencia).
 OBSTACLE_RISK = {
     "backpack": "mochila", "handbag": "bolso", "suitcase": "maleta",
     "bottle": "botella", "book": "libro", "umbrella": "paraguas",

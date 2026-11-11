@@ -209,6 +209,24 @@ class EngineCadenceTest(unittest.TestCase):
         self.assertLessEqual(calls["people"], 5)
 
 
+class ObstacleRiskTest(unittest.TestCase):
+    """Un objeto en la escalera es riesgo MEDIO (naranja), nunca ALTO (rojo)."""
+
+    def test_obstacles_are_medium_risk(self):
+        from backend.perception.catalog import RISK_CATALOG, RISK_COLOR
+        from backend.rendering.draw import _obstacle_style, summarise
+        self.assertEqual(RISK_CATALOG["obstaculo_escalon"]["riesgo"], "MEDIO")
+        mochila = {"tipo": "obstaculo_escalon", "objeto": "backpack",
+                   "riesgo": "MEDIO", "conf": 0.9, "bbox": [0, 0, 10, 10]}
+        color, prefix, es_riesgo = _obstacle_style(mochila)
+        self.assertEqual(color, RISK_COLOR["MEDIO"])
+        self.assertTrue(es_riesgo)
+        # varios objetos siguen siendo MEDIO
+        dets = [{"risk": "MEDIO", "tipo": "obstaculo_escalon"}] * 4 + \
+               [{"risk": "BAJO", "class_name": "persona_erguida"}]
+        self.assertEqual(summarise(dets)["level"], "MEDIO")
+
+
 class LifecycleTest(unittest.TestCase):
     def test_shutdown_runs_hooks_once_in_reverse_order(self):
         from backend.services.lifecycle import Lifecycle

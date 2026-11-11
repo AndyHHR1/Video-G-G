@@ -545,7 +545,10 @@ class RiskEngine:
         # --- 9. veredicto global ------------------------------------------
         risks = [d["riesgo"] for d in dets if d["riesgo"] in ("ALTO", "MEDIO")]
         risks += [p["riesgo"] for p in pose_signals]
-        risks += ["ALTO"] * sum(1 for o in obstacles if o.get("riesgo") == "ALTO")
+        # Objetos en la escalera: MEDIO (riesgo a vigilar), nunca ALTO por sí
+        # solos; el rojo queda para caídas y pérdida de equilibrio.
+        risks += ["MEDIO"] * sum(1 for o in obstacles
+                                 if o.get("tipo") == "obstaculo_escalon")
         level = max(risks, key=lambda r: RISK_ORDER.get(r, 0), default="BAJO")
 
         # El estado refleja los fallos de ESTE fotograma; después se olvidan

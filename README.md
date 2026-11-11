@@ -55,7 +55,7 @@ y el panel tiene un botón **«Detener sistema»** que apaga todo de forma orden
 | Detectar **pérdida de equilibrio** | Clase `persona_desequilibrio` + señal `tambaleo` (inclinación del tronco > 12°, asimetría de rodillas). Riesgo ALTO. |
 | Detectar **persona distraída** | Señal `distraccion`: mano junto a la cara con cabeza inclinada, o un **celular** (COCO) a menos de 0.14 del rostro. Riesgo MEDIO. |
 | Detectar **no uso del pasamanos** | Señal `sin_pasamanos`: ninguna muñeca a la altura de la barandilla y brazo separado del tronco. Riesgo MEDIO. |
-| Detectar **anomalías en la escalera** (objetos, estorbos) | YOLOv8s COCO: mochila, bolso, maleta, botella, libro, paraguas → `obstaculo_escalon` (ALTO); mobiliario como contexto. |
+| Detectar **anomalías en la escalera** (objetos, estorbos) | YOLOv8s COCO: mochila, bolso, maleta, botella, libro, paraguas → `obstaculo_escalon` (MEDIO: riesgo a vigilar; el rojo queda para caídas y desequilibrio); mobiliario como contexto. |
 | Opción para ver la imagen en vivo **con mejora de calidad** | Casilla **«Mejora de calidad (Real-ESRGAN x4)»**: Real-ESRGAN x4 (`realesr-general-x4v3`) en un hilo propio, ~22 ms por cuadro → el vídeo mejorado se ve fluido (~29 fps medidos). |
 | Solo vídeo en vivo | Se eliminaron las pestañas y rutas de imagen y vídeo **subidos** (`/api/detect`, `/api/video`) y el modelo de SR que solo usaban ellas. |
 | Funcionar en una **GTX 1650** | Perfil `baja_vram` automático: Real-ESRGAN en FP32 y entrada de 320 px. Pico medido con todo activo: **0.32 GB de VRAM** (§4.5). |

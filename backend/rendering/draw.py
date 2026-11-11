@@ -28,11 +28,11 @@ def _label(frame, text: str, x: int, y: int, color) -> None:
 
 
 def _obstacle_style(o: dict) -> tuple[tuple, str, bool]:
-    es_riesgo = o.get("riesgo") == "ALTO"
+    es_riesgo = o.get("tipo") == "obstaculo_escalon"
     if o.get("tipo") == "telefono":
-        return RISK_COLOR["MEDIO"], "TELEFONO", es_riesgo
+        return RISK_COLOR["MEDIO"], "TELEFONO", False
     if es_riesgo:
-        return RISK_COLOR["ALTO"], "OBSTACULO", True
+        return RISK_COLOR["MEDIO"], "OBSTACULO", True     # naranja, no rojo
     return RISK_COLOR["CONTEXTO"], "ESCENA", False
 
 
@@ -135,7 +135,7 @@ def draw_all(frame: np.ndarray, result: dict) -> list[dict]:
         _label(frame, f'{prefix} {o["objeto"]} {o["conf"]:.0%}', x1, y1, color)
         out.append({"tipo": o["tipo"], "objeto": o["objeto"],
                     "confidence": o["conf"],
-                    "risk": "ALTO" if es_riesgo else "CONTEXTO",
+                    "risk": "MEDIO" if es_riesgo else "CONTEXTO",
                     "bbox": o["bbox"],
                     "ref": "RQF02 (1)" if es_riesgo else "escena"})
 
@@ -175,7 +175,8 @@ def summarise(detections: list[dict]) -> dict:
     notes = {
         "ALTO": "Se ha detectado una condición de caída o pérdida de equilibrio. "
                 "Requiere alerta inmediata (RQF06).",
-        "MEDIO": "Postura no ergonómica detectada. Conviene revisar (RQF04).",
+        "MEDIO": "Riesgo moderado (postura no ergonómica u objetos en la "
+                 "escalera). Conviene revisar (RQF04).",
         "BAJO": "No se detectan conductas de riesgo en la escena.",
     }
     return {"n": len(detections), "level": level, "riesgo": level,

@@ -80,7 +80,9 @@ class CocoDetector:
             out.append({
                 "tipo": "obstaculo_escalon" if es_riesgo else "elemento_escena",
                 "objeto": self.names[cid],
-                "riesgo": "ALTO" if es_riesgo else "CONTEXTO",
+                # Un objeto en la escalera es un riesgo a vigilar, no una
+                # emergencia como una caída: MEDIO (naranja), nunca ALTO.
+                "riesgo": "MEDIO" if es_riesgo else "CONTEXTO",
                 "conf": conf, "bbox": bbox,
             })
         return out
