@@ -9,6 +9,8 @@ cinemática → equilibrio, por cada identidad seguida.
                  Kinematics (tronco, cadera, cabeza, centro de masa vs pies)
                                               ▼
                  BalanceMonitor (votos + persistencia) ─► alerta
+                 PostureRules (caído / postura incorrecta / de pie, por
+                               reglas geométricas: seguro frente al modelo)
 """
 from __future__ import annotations
 
@@ -20,6 +22,7 @@ from .balance import BalanceMonitor
 from .filters import KeypointSmoother
 from .keypoints import N_KP
 from .kinematics import Kinematics
+from .posture_rules import PostureRules
 
 
 class _Track:
@@ -50,11 +53,15 @@ class SkeletonAnalyzer:
             from .morphology import ForegroundMorphology
             self.morph = ForegroundMorphology()
         self.balance = BalanceMonitor(cfg.balance)
+        pcfg = getattr(cfg, "postura", None)
+        self.posture = PostureRules(pcfg) if pcfg is not None and pcfg.enabled else None
         self.tracks: dict[int, _Track] = {}
 
     def reset(self) -> None:
         self.tracks.clear()
         self.balance = BalanceMonitor(self.cfg.balance)
+        if self.posture is not None:
+            self.posture = PostureRules(self.cfg.postura)
         self.estimator.reset()
 
     def step(self, frame: np.ndarray, t: float | None = None) -> list[dict]:
@@ -101,6 +108,10 @@ class SkeletonAnalyzer:
                     and (m["cadera_v"] or 0) < b.hip_down_speed:
                 tr.kin.add_baseline(t, m["tronco_deg"])
         eq["linea_base_deg"] = None if baseline is None else round(baseline, 1)
+        if self.posture is not None:
+            out["postura"] = ({"estado": "no_evaluable", "criterios": []} if small
+                              else self.posture.evaluate(o.track_id, x, valid,
+                                                         m["torso"], nadir, t))
         com = m.pop("com", None)
         m["torso_px"] = None if not m["torso"] else round(m["torso"] * h, 1)
         m.pop("torso", None)
@@ -115,6 +126,8 @@ class SkeletonAnalyzer:
             if t - tr.last_seen > self.cfg.forget_s:
                 del self.tracks[tid]
                 self.balance.forget(tid)
+                if self.posture is not None:
+                    self.posture.forget(tid)
 
 
 def _pack(xy, conf, valid, held) -> list:

@@ -145,12 +145,33 @@ skeleton:
     persist_s: 0.25           # sostenido este tiempo -> pérdida de equilibrio
     cooldown_s: 10            # una alerta por persona cada 10 s como máximo
     min_torso_px: 24          # personas más pequeñas no se evalúan (poco fiable)
+  # Seguro de postura por REGLAS de los puntos, independiente del modelo
+  # (backend/perception/skeleton/posture_rules.py). Alturas en torsos de esa
+  # persona; de pie: cabeza 1.4 sobre la cadera, cadera 1.65 sobre los tobillos.
+  postura:
+    enabled: true
+    # caído: >= 3 criterios, o 2 si uno es de cuerpo tendido
+    hands_feet_torso: 0.5     # manos a la altura de los pies
+    head_hip_torso: 0.35      # cabeza a la altura de la cadera
+    lying_ratio: 1.3          # puntos más anchos que altos (cuerpo tendido)
+    axis_deg: 60              # eje hombros->tobillos casi horizontal
+    min_points: 8
+    # postura incorrecta (sentado/agachado): >= min_votes criterios
+    hip_knee_torso: 0.35      # cadera a la altura de las rodillas
+    knee_angle_deg: 110       # AMBAS rodillas dobladas (subir un escalón dobla una)
+    compact_torso: 1.0        # cadera y tobillos juntos en vertical
+    min_votes: 2
+    # claramente de pie: veta una caída que solo ve el recorte del modelo
+    upright_head_torso: 0.9
+    upright_hip_ankle_torso: 1.2
+    persist_caido_s: 0.6      # sostenido este tiempo para confirmar
+    persist_postura_s: 1.0
 
 # Perfil de hardware. Debe funcionar en una GTX 1650 (4 GB, Turing sm_75):
 # la build cu128 de PyTorch ya soporta sm_75; el perfil "baja_vram" solo
 # ajusta lo que en esa tarjeta cuesta demasiado. Ver backend/hardware.py.
 hardware:
-  profile: auto          # auto | normal | baja_vram
+  profile: auto          # auto | normal | baja_vram | cpu (auto: sin GPU -> cpu)
   low_vram_gb: 4.5       # en auto, una GPU con <= 4.5 GB (o GTX 16xx) usa baja_vram
   baja_vram:
     enhancement.half: false            # GTX 16xx: FP16 da NaN/negro en varias redes

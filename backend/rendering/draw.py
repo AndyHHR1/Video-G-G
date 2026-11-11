@@ -38,6 +38,9 @@ def _obstacle_style(o: dict) -> tuple[tuple, str, bool]:
 
 _SKEL_STATE_COLOR = {"perdida_equilibrio": RISK_COLOR["ALTO"],
                      "inestable": RISK_COLOR["MEDIO"]}
+# Seguro de postura por reglas del esqueleto (skeleton/posture_rules.py)
+_SKEL_POSTURE_COLOR = {"caido": RISK_COLOR["ALTO"],
+                       "postura_incorrecta": RISK_COLOR["MEDIO"]}
 
 
 def draw_skeletons(frame: np.ndarray, skeletons: list[dict]) -> None:
@@ -48,7 +51,8 @@ def draw_skeletons(frame: np.ndarray, skeletons: list[dict]) -> None:
         if not kps:
             continue
         state = (sk.get("equilibrio") or {}).get("estado", "")
-        alarm = _SKEL_STATE_COLOR.get(state)
+        posture = (sk.get("postura") or {}).get("estado", "")
+        alarm = _SKEL_STATE_COLOR.get(state) or _SKEL_POSTURE_COLOR.get(posture)
         for group, bones in BONES.items():
             color = alarm or BONE_COLOR_BGR[group]
             for a, b in bones:
@@ -75,6 +79,10 @@ def draw_skeletons(frame: np.ndarray, skeletons: list[dict]) -> None:
             txt = f'P{sk["id"]}' + (f" tronco {ang:.0f}deg" if ang is not None else "")
             if state == "perdida_equilibrio":
                 txt += " DESEQUILIBRIO"
+            if posture == "caido":
+                txt += " CAIDO"
+            elif posture == "postura_incorrecta":
+                txt += " POSTURA"
             cv2.putText(frame, txt, (x1, max(12, y1 - 22)), _FONT, 0.45,
                         alarm or (0, 255, 255), 1, cv2.LINE_AA)
 

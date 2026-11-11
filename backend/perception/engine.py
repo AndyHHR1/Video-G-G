@@ -240,6 +240,101 @@ class RiskEngine:
                             "detalle": f"persona {sk['id']}: {reason}"})
 
     # ------------------------------------------------------------------ #
+    # Esqueletos: seguro de postura por reglas (independiente del modelo)
+    # ------------------------------------------------------------------ #
+    def _link_posture(self, skeletons: list, dets: list, signals: list) -> None:
+        """Aplica el veredicto geométrico de cada esqueleto a la caja de
+        persona que mejor solapa (skeleton/posture_rules.py):
+
+        * `caido`: la caja pasa a «Persona caída», ALTO, aunque el modelo
+          dijera otra cosa. Si COCO no vio a esa persona, se añade su caja.
+        * `postura_incorrecta`: una caja de riesgo BAJO/NEUTRO sube a MEDIO.
+        * `erguido` (claramente de pie, todos los puntos clave visibles): una
+          caída del recorte del modelo o de la geometría de MediaPipe pasa a
+          «de pie» y no genera alerta (el «desequilibrio» de MediaPipe solo si
+          el monitor de equilibrio del esqueleto también la ve estable).
+        """
+        for sk in skeletons:
+            pst = sk.get("postura") or {}
+            estado = pst.get("estado")
+            if estado not in ("caido", "postura_incorrecta", "erguido"):
+                continue
+            people = [d for d in dets if d.get("class_id") != 3]
+            best = max(people, key=lambda d: iou(d["bbox"], sk["bbox"]),
+                       default=None)
+            matched = best is not None and iou(best["bbox"], sk["bbox"]) >= 0.3
+            crit = ", ".join(pst.get("criterios", []))
+
+            if estado == "erguido":
+                # Veto: el esqueleto ve a la persona claramente de pie (todos
+                # los puntos clave a su altura normal) y la caja dice caída.
+                #  * recorte del modelo: siempre;
+                #  * geometría de MediaPipe: describe UNA persona y en escenas
+                #    con gente se empareja con la caja equivocada (medido con
+                #    peatones de MOT15: 168 de 192 falsas caídas venían de
+                #    ahí). Su «desequilibrio» solo se veta si el monitor de
+                #    equilibrio del esqueleto también la ve estable.
+                if not matched:
+                    continue
+                origin = str(best.get("origen", ""))
+                name = best.get("class_name")
+                eq = (sk.get("equilibrio") or {}).get("estado")
+                veto = (name == "persona_caido"
+                        and (origin.startswith("modelo")
+                             or origin == "geometria de pose")) or \
+                       (name == "persona_desequilibrio"
+                        and origin == "geometria de pose" and eq == "estable")
+                if veto:
+                    conf_m = best.get("confidence", 0.0)
+                    best.pop("_fall_pending", None)
+                    best.pop("risk_type", None)       # no genera alerta
+                    # se conservan las señales que no son de caída
+                    # (distracción, pasamanos) que ya subieron su riesgo
+                    keep = [s_["riesgo"] for s_ in signals
+                            if s_.get("tipo") in best.get("senales", [])
+                            and s_.get("tipo") != "tambaleo"]
+                    best.update(class_id=2, class_name="persona_erguida",
+                                riesgo=max(["BAJO"] + keep,
+                                           key=lambda r: RISK_ORDER.get(r, 0)),
+                                clase_modelo=name, veto_esqueleto=True,
+                                ref=(f"esqueleto {sk['id']} de pie ({origin} "
+                                     f"veía {name.replace('persona_', '')} "
+                                     f"{conf_m:.2f})"))
+                continue
+
+            if not matched:
+                if estado != "caido":
+                    continue              # sin caja: solo la caída se añade
+                best = {"class_id": 4, "class_name": "persona",
+                        "confidence": 0.0, "origen": "esqueleto",
+                        "bbox": [int(v) for v in sk["bbox"]], "track_id": None,
+                        "riesgo": "NEUTRO", "ref": ""}
+                dets.append(best)
+                self.tracker.update([best])
+            best["esqueleto_id"] = sk["id"]
+
+            if estado == "caido":
+                meta = RISK_CATALOG["caida_esqueleto"]
+                if best.get("class_name") != "persona_caido":
+                    best["clase_modelo"] = best.get("class_name")
+                best.update(class_id=0, class_name="persona_caido",
+                            risk_type="caida", riesgo="ALTO",
+                            ref=f"esqueleto {sk['id']}: {crit}",
+                            confidence=max(best.get("confidence", 0.0), 0.6))
+                best.pop("_fall_pending", None)   # ya confirmada por reglas
+            else:
+                if RISK_ORDER.get(best.get("riesgo", "NEUTRO"), 0) >= RISK_ORDER["MEDIO"]:
+                    continue                  # ya tiene un riesgo igual o mayor
+                meta = RISK_CATALOG["postura_esqueleto"]
+                best.update(risk_type="postura_no_erguida", riesgo="MEDIO",
+                            ref=f"esqueleto {sk['id']}: {crit}")
+            signals.append({"tipo": "caida_esqueleto" if estado == "caido"
+                            else "postura_esqueleto",
+                            "conf": 0.6, "riesgo": meta["riesgo"],
+                            "ref": meta["ref"], "desc": meta["desc"],
+                            "detalle": f"persona {sk['id']}: {crit}"})
+
+    # ------------------------------------------------------------------ #
     # Pipeline
     # ------------------------------------------------------------------ #
     def step(self, frame: np.ndarray, force: bool = False,
@@ -405,6 +500,9 @@ class RiskEngine:
 
         # --- 6. seguimiento + confirmación de caídas ----------------------
         self.tracker.update(dets)
+        # El seguro del esqueleto va ANTES de confirmar caídas: puede vetar
+        # una caída del modelo (persona claramente de pie) o imponerla.
+        self._link_posture(skeletons, dets, pose_signals)
         self._confirm_falls(dets)
         self._link_balance(skeletons, dets, pose_signals)
         for conf_s, box in stairs:

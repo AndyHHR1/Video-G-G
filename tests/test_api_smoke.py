@@ -83,7 +83,11 @@ class ApiSmokeTest(unittest.TestCase):
         for fid in range(1, 80):                 # asíncrono: los primeros pueden ir vacíos
             d = self.client.post(f"/api/frame?overlay=0&sr=1&fid={fid}", data=jpg,
                                  content_type="image/jpeg").get_json()
-            if not d.get("pendiente") and d["detections"]:
+            # Esperar también a un esqueleto con identidad: ByteTrack necesita
+            # varios fotogramas para confirmar el ID y el esqueleto corre a su
+            # cadencia (skeleton.every), no en cada fotograma.
+            if not d.get("pendiente") and d["detections"] and any(
+                    x.get("id") is not None for x in d.get("esqueletos", [])):
                 break
             time.sleep(0.05)                     # ritmo de cámara, no ráfaga
         boxes = [x["bbox"] for x in d["detections"] if "bbox" in x]

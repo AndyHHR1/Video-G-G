@@ -147,6 +147,31 @@ class BalanceCfg:
 
 
 @dataclass
+class PostureRulesCfg:
+    """Seguro de postura por reglas del esqueleto (skeleton/posture_rules.py).
+    Alturas en torsos de la persona (de pie: cabeza 1.4 sobre la cadera,
+    cadera 1.65 sobre los tobillos y 0.8 sobre las rodillas)."""
+    enabled: bool = True
+    # caído
+    hands_feet_torso: float = 0.5   # muñecas a esta altura de los tobillos o menos
+    head_hip_torso: float = 0.35    # cabeza como mucho esto por encima de la cadera
+    lying_ratio: float = 1.3        # ancho / alto de los puntos visibles
+    axis_deg: float = 60.0          # eje hombros->tobillos respecto a la vertical
+    min_points: int = 8             # puntos visibles para medir la extensión
+    # postura incorrecta (sentado / agachado)
+    hip_knee_torso: float = 0.35
+    knee_angle_deg: float = 110.0
+    compact_torso: float = 1.0
+    min_votes: int = 2
+    # de pie con claridad (veta un «caído» del modelo)
+    upright_head_torso: float = 0.9
+    upright_hip_ankle_torso: float = 1.2
+    # persistencia antes de confirmar
+    persist_caido_s: float = 0.6
+    persist_postura_s: float = 1.0
+
+
+@dataclass
 class SkeletonCfg:
     enabled: bool = True
     model: str = "models/pose/yolov8s-pose.pt"
@@ -162,6 +187,7 @@ class SkeletonCfg:
     smoothing: SkeletonSmoothingCfg = field(default_factory=SkeletonSmoothingCfg)
     perspective: SkeletonPerspectiveCfg = field(default_factory=SkeletonPerspectiveCfg)
     balance: BalanceCfg = field(default_factory=BalanceCfg)
+    postura: PostureRulesCfg = field(default_factory=PostureRulesCfg)
     # rutas absolutas, rellenadas por Settings
     model_path: Any = None
     tracker_path: Any = None

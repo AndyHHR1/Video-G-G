@@ -418,6 +418,27 @@ MediaPipe, que sigue dando las señales de pasamanos y distracción.
 | Equilibrio | `balance.py` | Votos de 5 criterios + persistencia + enfriamiento; un criterio que no se puede ver (tobillos tapados) no vota. |
 | Orquestación | `analyzer.py` | Estado por identidad; olvida IDs no vistos en `forget_s`. |
 | Morfología | `morphology.py` | **Omitida** por defecto: medida, no mejora (ver abajo). |
+| **Seguro de postura** | `posture_rules.py` | Reglas geométricas **independientes del modelo**, por persona (ver abajo). |
+
+**Seguro de postura por reglas (independiente del modelo).** Cada esqueleto
+se clasifica también con reglas sobre sus puntos, en torsos de esa persona
+(`configs/app.yaml → skeleton.postura`):
+
+| Veredicto | Criterios |
+|---|---|
+| **Caído** (≥ 3, o 2 si uno es de cuerpo tendido) | manos a la altura de los pies · cabeza a la altura de la cadera · puntos más anchos que altos · eje hombros→tobillos casi horizontal |
+| **Postura incorrecta** (≥ 2) | cadera a la altura de las rodillas · **ambas** rodillas dobladas · cadera y tobillos juntos |
+| **De pie** | ningún criterio y cabeza, cadera, rodillas y tobillos visibles a su altura normal |
+
+Funciona como seguro en los dos sentidos (`RiskEngine._link_posture`): si el
+esqueleto ve una caída y el modelo no, gana el esqueleto (ALTO); si el modelo
+ve una caída en el recorte, o MediaPipe la ve en su única pose, pero el
+esqueleto está claramente de pie, gana el esqueleto (de pie, sin alerta). Con
+peatones reales de MOT15, 168 de 192 caídas falsas venían de MediaPipe
+emparejando su pose con la persona equivocada. Un criterio que no se ve (pasamanos) no vota, y el
+estado debe sostenerse (0.6 s caído, 1 s postura) para confirmarse.
+Agacharse a recoger algo (manos a los pies, cabeza a la cadera, cuerpo no
+tendido) no cuenta como caída; subir un escalón dobla una sola rodilla.
 
 **Vista picada.** La vertical de la imagen no es la del mundo. Dos defensas:
 (1) el ángulo del tronco se compara con la **línea base propia** de cada

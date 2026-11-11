@@ -95,6 +95,17 @@ RISK_CATALOG: dict[str, dict] = {
         "n": 3, "riesgo": "MEDIO", "ref": "RQF03",
         "desc": "Postura no ergonómica: no corresponde a tránsito de pie.",
     },
+    # Seguro por reglas del esqueleto (skeleton/posture_rules.py)
+    "caida_esqueleto": {
+        "n": 4, "riesgo": "ALTO", "ref": "RQF02 (4) · reglas del esqueleto",
+        "desc": "Caída vista en los puntos del cuerpo: manos a la altura de "
+                "los pies, cabeza a la altura de la cadera o cuerpo tendido.",
+    },
+    "postura_esqueleto": {
+        "n": 3, "riesgo": "MEDIO", "ref": "RQF03 · reglas del esqueleto",
+        "desc": "Sentado o agachado según los puntos: cadera a la altura de "
+                "las rodillas, rodillas dobladas o cuerpo compacto.",
+    },
 }
 
 # Señal de pose que no es una categoría de RQF02 pero se reporta con ella.
