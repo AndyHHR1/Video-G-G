@@ -159,6 +159,9 @@
           <label title="Mejora de calidad Real-ESRGAN x4 (realesr-general-x4v3) en tiempo real: ~22 ms por cuadro en GPU, el video se mantiene fluido (~30 fps). La detección siempre usa el cuadro original.">
             <input type="checkbox" id="fast"> Mejora de calidad (Real-ESRGAN x4)
           </label>
+          <label title="Por defecto los cuadros y esqueletos son intermitentes: aparecen unos segundos cuando entra alguien o cambia la escena, y brevemente cada 8 s. Los riesgos (naranja/rojo) se ven siempre. Marca esta casilla para verlos todo el tiempo.">
+            <input type="checkbox" id="overlayAlways"> Mostrar siempre cuadros y esqueletos
+          </label>
          </div>
         <div class="stage" id="scam">
           <div class="placeholder">Pulsa «Conectar webcam» para usar la cámara de este equipo</div>
@@ -393,6 +396,42 @@ function hexToB64(hex) {
 // las cajas en coordenadas normalizadas (0..1), asi que se escalan al canvas.
 const RISK_COLOR = {ALTO:'#e03c3c', MEDIO:'#f2a83c', BAJO:'#3fb85a',
                     NEUTRO:'#dcdcdc', CONTEXTO:'#c878c8'};
+
+// ---------- cuadros y esqueletos intermitentes ----------
+// Por defecto el vídeo queda limpio: cuadros y esqueletos aparecen solo un
+// rato cuando pasa algo y luego se desvanecen. Los riesgos (MEDIO/ALTO) se ven
+// SIEMPRE, pero solo ellos. La casilla #overlayAlways los fija todo el tiempo.
+const OVERLAY_SHOW_MS = 3000;    // visibles tras un evento (persona nueva)
+const OVERLAY_PULSE_EVERY = 8000; // recordatorio periódico: el sistema vigila
+const OVERLAY_PULSE_MS = 1500;
+const OVERLAY_FADE_MS = 400;     // desvanecido al final
+const OVERLAY_ID_MEMORY = 5000;  // una identidad no vista en 5 s cuenta como nueva
+const overlay = { always: false, until: 0, lastPulse: 0, seen: new Map() };
+try { overlay.always = localStorage.getItem('overlayAlways') === '1'; } catch (_) {}
+
+function isRisky(r) { return r === 'ALTO' || r === 'MEDIO'; }
+
+// Opacidad (0..1) de los elementos SIN riesgo en este fotograma.
+function overlayAlpha(d) {
+  if (overlay.always) return 1;
+  const now = performance.now();
+  let fresh = false;
+  for (const b of d.detections || []) {
+    if (b.track_id == null) continue;
+    const last = overlay.seen.get(b.track_id);
+    if (last == null || now - last > OVERLAY_ID_MEMORY) fresh = true;   // entra alguien
+    overlay.seen.set(b.track_id, now);
+  }
+  for (const [id, t] of overlay.seen) if (now - t > 4 * OVERLAY_ID_MEMORY) overlay.seen.delete(id);
+  if (fresh) overlay.until = Math.max(overlay.until, now + OVERLAY_SHOW_MS);
+  if (now - overlay.lastPulse > OVERLAY_PULSE_EVERY) {
+    overlay.lastPulse = now;
+    overlay.until = Math.max(overlay.until, now + OVERLAY_PULSE_MS);
+  }
+  const left = overlay.until - now;
+  return left <= 0 ? 0 : Math.min(1, left / OVERLAY_FADE_MS);
+}
+
 function drawBoxes(src, dst, d) {
   // `src` es el frame super-resuelto (SR 4×) devuelto por el servidor como
   // `image`, o, si no se devolvió, el canvas nativo capturado en el navegador.
@@ -414,8 +453,10 @@ function drawBoxes(src, dst, d) {
    c.filter = 'brightness(1.08) contrast(1.10) saturate(1.05)';
    c.drawImage(src, 0, 0, dst.width, dst.height);
    c.filter = 'none';
+  const alpha = overlayAlpha(d);
   for (const b of d.detections) {
     // las señales de postura no tienen caja: no se dibuja rectángulo
+    // (son avisos de riesgo en texto: se ven siempre)
     if (!b.bbox) {
       const col = RISK_COLOR[b.risk] || '#dcdcdc';
       c.font = 'bold 13px system-ui,sans-serif';
@@ -424,6 +465,10 @@ function drawBoxes(src, dst, d) {
                   10, 54 + 16 * (d._sp = (d._sp||0) + 1) - 16);
       continue;
     }
+    // intermitente: lo que no es riesgo solo se ve mientras alpha > 0
+    const a = isRisky(b.risk) ? 1 : alpha;
+    if (a <= 0) continue;
+    c.globalAlpha = a;
     const col = RISK_COLOR[b.risk] || '#dcdcdc';
     const x1 = b.bbox[0]*dst.width, y1 = b.bbox[1]*dst.height;
     const x2 = b.bbox[2]*dst.width, y2 = b.bbox[3]*dst.height;
@@ -437,8 +482,10 @@ function drawBoxes(src, dst, d) {
     c.fillStyle = '#141414';
     c.fillText(t, x1+4, Math.max(12,y1-4));
   }
-  drawSkeletons(c, dst, d.esqueletos || []);
-  // banda de estado
+  c.globalAlpha = 1;
+  drawSkeletons(c, dst, d.esqueletos || [], alpha);
+  c.globalAlpha = 1;
+  // banda de estado (siempre visible)
   c.fillStyle = 'rgba(30,30,30,0.85)';
   c.fillRect(0,0,dst.width,40);
   c.fillStyle = '#fff'; c.font='13px system-ui,sans-serif';
@@ -457,13 +504,17 @@ const BONE_COLOR = {cabeza:'#50c8ff', brazos:'#ffdc50', tronco:'#ffffff', pierna
 const SK_STATE = {perdida_equilibrio:'#e03c3c', inestable:'#f2a83c'};
 // Seguro de postura por reglas del esqueleto (skeleton/posture_rules.py)
 const SK_POSTURA = {caido:'#e03c3c', postura_incorrecta:'#f2a83c'};
-function drawSkeletons(c, dst, sks) {
+function drawSkeletons(c, dst, sks, alpha = 1) {
   const W = dst.width, H = dst.height;
   for (const sk of sks) {
     const k = sk.kps || []; if (!k.length) continue;
     const st = (sk.equilibrio || {}).estado || '';
     const ps = (sk.postura || {}).estado || '';
     const alarm = SK_STATE[st] || SK_POSTURA[ps];
+    // intermitente: un esqueleto en alarma se ve siempre; el resto, con alpha
+    const a = alarm ? 1 : alpha;
+    if (a <= 0) continue;
+    c.globalAlpha = a;
     c.lineWidth = 2;
     for (const [g, bones] of Object.entries(BONES)) {
       c.strokeStyle = alarm || BONE_COLOR[g];
@@ -543,6 +594,15 @@ function stopCam() {
 }
 
 $('#bstop').onclick = stopCam;
+
+// Casilla "Mostrar siempre cuadros y esqueletos" (recordada en el navegador)
+$('#overlayAlways').checked = overlay.always;
+$('#overlayAlways').onchange = (e) => {
+  overlay.always = e.target.checked;
+  // al volver a intermitente se muestran un momento antes de desvanecerse
+  overlay.until = performance.now() + OVERLAY_SHOW_MS;
+  try { localStorage.setItem('overlayAlways', overlay.always ? '1' : '0'); } catch (_) {}
+};
 
 $('#bcam').onclick = async () => {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
