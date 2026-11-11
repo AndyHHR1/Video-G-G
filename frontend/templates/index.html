@@ -50,9 +50,50 @@
   .stage canvas.live { max-width:100%; height:auto; }
   .stage canvas.zone-ov { position:absolute; pointer-events:none; max-height:none; border-radius:4px; }
   .stage canvas.zone-ov.editing { pointer-events:auto; cursor:crosshair; }
-  .sens-hint { font-size:12px; color:var(--muted); margin:-6px 0 12px; line-height:1.45; }
+  /* Controles de la cámara: acciones arriba; debajo, tres grupos con título
+     (detección · vídeo · vista y avisos) separados por una línea fina. */
+  .camctl { margin-bottom:14px; }
+  .camctl-actions { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:12px; }
+  .camctl-setup { margin-left:auto; }
+  .camctl-groups { display:grid; grid-template-columns:minmax(260px,1.5fr) minmax(190px,1fr) minmax(210px,1fr);
+                   border-top:1px solid var(--line); padding-top:12px; }
+  .cg { border:0; margin:0; padding:0 16px; min-width:0; display:flex; flex-direction:column; gap:8px; }
+  .cg:first-child { padding-left:0; }
+  .cg:last-child { padding-right:0; }
+  .cg + .cg { border-left:1px solid var(--line); }
+  .cg legend { float:left; width:100%; padding:0; margin-bottom:2px; font-size:12px; font-weight:600;
+               text-transform:uppercase; letter-spacing:.06em; color:var(--muted); }
+  .cg-slider { display:flex; align-items:center; gap:10px; color:var(--text); }
+  .cg-slider input[type=range] { flex:1; min-width:110px; width:auto; }
+  .cg-slider b { font-variant-numeric:tabular-nums; min-width:2.6em; text-align:right; }
+  .cg-field { display:flex; flex-direction:column; align-items:flex-start; gap:4px; }
+  .cg-field select { width:100%; max-width:240px; }
+  .cg-check { display:flex; align-items:center; gap:8px; cursor:pointer; line-height:1.35; }
+  .cg-check input { margin:0; flex:none; accent-color:var(--accent); }
+  .camctl input[type=range] { accent-color:var(--accent); }
+  .camctl :focus-visible { outline:2px solid var(--accent); outline-offset:2px; border-radius:4px; }
+  @media (max-width: 1100px) {
+    .camctl-groups { grid-template-columns:1fr 1fr; row-gap:14px; }
+    .cg-sens { grid-column:1 / -1; padding-right:0; }
+    .cg-sens + .cg { border-left:0; padding-left:0; }
+  }
+  @media (max-width: 600px) {
+    .camctl-groups { grid-template-columns:1fr; }
+    .cg, .cg + .cg { border-left:0; padding:0; }
+    .camctl-setup { margin-left:0; }
+  }
+  .sens-hint { font-size:12px; color:var(--muted); line-height:1.5; max-width:62ch; }
   .sens-hint b { color:var(--text); font-weight:600; }
   .sens-hint .cost { color:#f2a83c; }
+  /* la tarjeta de riesgo de la cámara solo ocupa sitio cuando tiene datos */
+  #camrisk:empty { display:none; }
+  /* Contraste AA en la pestaña de cámara (sin tocar el color general, que
+     comparten las pestañas de audio e imagen): botón principal con texto
+     blanco a 5.2:1 (antes 3.2:1) y el aviso del área de vídeo legible
+     (antes 1.9:1). */
+  .camctl-actions button:not(.ghost):not(:disabled), #zSave { background:#2563eb; }
+  .camctl-actions button:not(.ghost):not(:disabled):hover, #zSave:hover { background:#1d4ed8; }
+  #scam .placeholder { color:var(--muted); }
   .zonebar { background:#141821; border:1px solid var(--line); border-radius:8px; padding:8px 12px; }
   .zonebar b { color:#c878c8; font-size:13px; }
   .placeholder { color:#39404f; font-size:13px; padding:60px 20px; text-align:center; }
@@ -132,7 +173,7 @@
   <div class="top">
     <div>
       <h1>Prevención de Caídas y Riesgos en Escaleras</h1>
-      <div class="sub" style="margin-bottom:4px">Vídeo en vivo · YOLOv8 · 6 clases · <span id="dev">—</span></div>
+      <div class="sub" style="margin-bottom:4px">Vídeo en vivo · Modelo v5 (escalera + postura) · <span id="dev">—</span></div>
       <div class="mods" id="mods"></div>
     </div>
     <button id="bsys" class="btn-stop" title="Detiene todo el sistema: cámara, audio, imagen, modelos y servidor">⏻ Detener sistema</button>
@@ -149,33 +190,48 @@
   <div class="panel on" id="p-cam">
     <div class="grid">
       <div>
-        <div class="ctrl">
-          <button id="bcam">Conectar webcam</button>
-          <button id="bstop" class="ghost" disabled>Detener</button>
-          <label title="Confianza mínima para aceptar que algo es una persona. Más a la izquierda = más sensible; más a la derecha = más estricto.">Sensibilidad
-            <input type="range" id="ccam" min="0.05" max="0.60" step="0.05" value="0.20">
-            <b id="cvcam">0.20</b></label>
-          <label>Enviar cada
-            <select id="rate" class="sel">
-              <option value="100">10 fps</option>
-              <option value="66">15 fps</option>
-              <option value="50">20 fps</option>
-              <option value="40">25 fps</option>
-              <option value="33" selected>30 fps (recomendado)</option>
-            </select>
-          </label>
-          <label title="Mejora de calidad Real-ESRGAN x4 (realesr-general-x4v3) en tiempo real: ~22 ms por cuadro en GPU, el video se mantiene fluido (~30 fps). La detección siempre usa el cuadro original.">
-            <input type="checkbox" id="fast"> Mejora de calidad (Real-ESRGAN x4)
-          </label>
-          <label title="Por defecto los cuadros y esqueletos son intermitentes: aparecen unos segundos cuando entra alguien o cambia la escena, y brevemente cada 8 s. Los riesgos (naranja/rojo) se ven siempre. Marca esta casilla para verlos todo el tiempo.">
-            <input type="checkbox" id="overlayAlways"> Mostrar siempre cuadros y esqueletos
-          </label>
-          <label title="Pitido cuando aparece una alerta nueva de vídeo: tres pitidos agudos si es crítica (roja), uno grave si es de precaución (naranja).">
-            <input type="checkbox" id="alertSound" checked> Sonido de alertas
-          </label>
-          <button class="ghost" id="bzone" title="Marca sobre la imagen dónde está la escalera y el pasamanos. Las personas fuera de la escalera no generan alertas, solo cuentan los objetos dentro de ella y el pasamanos se comprueba con la línea real.">Configurar zona</button>
-         </div>
-        <div class="sens-hint" id="sensHint"></div>
+        <div class="camctl">
+          <div class="camctl-actions">
+            <button id="bcam">Conectar webcam</button>
+            <button id="bstop" class="ghost" disabled>Detener</button>
+            <button class="ghost camctl-setup" id="bzone" title="Marca sobre la imagen dónde está la escalera y el pasamanos. Las personas fuera de la escalera no generan alertas, solo cuentan los objetos dentro de ella y el pasamanos se comprueba con la línea real.">Configurar zona</button>
+          </div>
+          <div class="camctl-groups">
+            <fieldset class="cg cg-sens">
+              <legend>Detección</legend>
+              <label class="cg-slider" title="Confianza mínima para aceptar que algo es una persona. Más a la izquierda = más sensible; más a la derecha = más estricto.">
+                <span>Sensibilidad</span>
+                <input type="range" id="ccam" min="0.05" max="0.60" step="0.05" value="0.20">
+                <b id="cvcam">0.20</b>
+              </label>
+              <div class="sens-hint" id="sensHint" aria-live="polite"></div>
+            </fieldset>
+            <fieldset class="cg">
+              <legend>Vídeo</legend>
+              <label class="cg-field">Enviar cada
+                <select id="rate" class="sel">
+                  <option value="100">10 fps</option>
+                  <option value="66">15 fps</option>
+                  <option value="50">20 fps</option>
+                  <option value="40">25 fps</option>
+                  <option value="33" selected>30 fps (recomendado)</option>
+                </select>
+              </label>
+              <label class="cg-check" title="Mejora de calidad Real-ESRGAN x4 (realesr-general-x4v3) en tiempo real: ~22 ms por cuadro en GPU, el video se mantiene fluido (~30 fps). La detección siempre usa el cuadro original.">
+                <input type="checkbox" id="fast"> Mejora de calidad (Real-ESRGAN x4)
+              </label>
+            </fieldset>
+            <fieldset class="cg">
+              <legend>Vista y avisos</legend>
+              <label class="cg-check" title="Por defecto los cuadros y esqueletos son intermitentes: aparecen unos segundos cuando entra alguien o cambia la escena, y brevemente cada 8 s. Los riesgos (naranja/rojo) se ven siempre. Marca esta casilla para verlos todo el tiempo.">
+                <input type="checkbox" id="overlayAlways"> Mostrar siempre cuadros y esqueletos
+              </label>
+              <label class="cg-check" title="Pitido cuando aparece una alerta nueva de vídeo: tres pitidos agudos si es crítica (roja), uno grave si es de precaución (naranja).">
+                <input type="checkbox" id="alertSound" checked> Sonido de alertas
+              </label>
+            </fieldset>
+          </div>
+        </div>
         <div class="ctrl zonebar" id="zoneBar" style="display:none">
           <b>Zona:</b>
           <label><input type="radio" name="ztool" value="escalera" checked> Escalera (contorno)</label>

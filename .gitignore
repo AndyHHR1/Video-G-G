@@ -162,3 +162,7 @@ desktop.ini
 
 # Módulo de audio: fixtures sintéticos de sus scripts
 modulos/audio/.test-runtime/
+
+# MemPalace per-project files (issue #185)
+mempalace.yaml
+entities.json
